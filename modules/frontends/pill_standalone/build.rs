@@ -24,6 +24,12 @@
 mod stage_std_dylib;
 
 fn main() {
+    // A device build links the ESP-IDF runtime, and `esp-idf-sys` publishes
+    // the link arguments that link needs. A build script runs on the host, so
+    // the target is read from cargo's environment rather than `cfg!`.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("espidf") {
+        embuild::espidf::sysenv::output();
+    }
     // Refused here rather than in the binary, which cannot see the profile. A
     // release-lineage build is always the shipping mode, so the `development`
     // posture is refused there. Cargo passes the profile as `PROFILE` and each

@@ -308,6 +308,10 @@ pub fn timestamp_format() -> TimestampFormat {
     timestamp_format_from_discriminant(TIMESTAMP_FORMAT.load(Ordering::Relaxed)).unwrap_or_default()
 }
 
+/// Whether the terminal layer styles its output with ANSI escapes. A UART
+/// prints the escapes themselves, so the device logs plain text.
+const TERMINAL_ANSI: bool = !cfg!(target_os = "espidf");
+
 /// Whether log lines end with the `file:line` that emitted them. Off by
 /// default; the project's `logging: source_location:` setting turns it on.
 static SHOW_SOURCE_LOCATION: AtomicBool = AtomicBool::new(false);
@@ -396,7 +400,13 @@ where
         let accepts_ansi = writer.has_ansi_escapes();
         if self.timestamps_enabled {
             let pattern = timestamp_format().pattern();
-            let timestamp = format!("[{}]", chrono::Local::now().format(pattern));
+            // The device has no time zone: its clock is UTC, and `Local` would
+            // ask for a zone database it does not have.
+            #[cfg(not(target_os = "espidf"))]
+            let now = chrono::Local::now();
+            #[cfg(target_os = "espidf")]
+            let now = chrono::Utc::now();
+            let timestamp = format!("[{}]", now.format(pattern));
             write!(
                 writer,
                 "{} ",
@@ -751,7 +761,7 @@ impl TelemetryBuilder {
         let (terminal_reload, terminal_handle) = reload::Layer::new(terminal_filter);
         let terminal_layer: TerminalLayer = tracing_subscriber::fmt::layer()
             .with_writer(log_output::terminal_writer())
-            .with_ansi(true)
+            .with_ansi(TERMINAL_ANSI)
             .event_format(EngineTerminalFormatter::new())
             .with_filter(terminal_reload);
 

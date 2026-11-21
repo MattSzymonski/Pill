@@ -142,6 +142,13 @@ opt-level = 3
 inherits = "release"
 debug = true
 
+# The device posture. `panic = "abort"` because the ESP-IDF runtime ships no
+# unwinder, and it pairs with `-Zbuild-std=std,panic_abort`; the host profiles
+# keep unwinding for hot reload.
+[profile.release-embedded]
+inherits = "release"
+panic = "abort"
+
 # Optimized development profile: the dev host with hot reload, at full speed.
 # `release` cannot host hot reload (its `lto = "fat"` refuses `-C prefer-dynamic`),
 # so measuring performance in a dev host needs a profile of its own. The host
@@ -149,3 +156,11 @@ debug = true
 [profile.development-optimized]
 inherits = "dev"
 opt-level = 3
+
+# `inventory` marks its `.init_array` constructors only for a fixed list of
+# `target_os` values, and `espidf` is missing from it: a device image
+# registers no components, systems or resources at all. The vendored copy adds
+# the one line (see `vendor/inventory/README.pill.md`); host builds are
+# unaffected because the added `target_os` is never true there.
+[patch.crates-io]
+inventory = { path = "vendor/inventory" }

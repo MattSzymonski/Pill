@@ -53,6 +53,14 @@ const STD_DYLIB_SUFFIX: &str = std::env::consts::DLL_SUFFIX;
 /// `OUT_DIR`, so it only works inside a build script. A failure is reported as
 /// a `cargo:warning`, never as a failed build, and running it twice is safe.
 pub fn stage_std_dylib() {
+    // A cross build's executable never imports the host toolchain's dylib, so
+    // staging one beside it would only leave a Windows DLL in a device target
+    // directory.
+    if let (Ok(host), Ok(target)) = (std::env::var("HOST"), std::env::var("TARGET")) {
+        if host != target {
+            return;
+        }
+    }
     stage_std_dylib_host();
 }
 

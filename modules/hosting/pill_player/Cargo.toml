@@ -24,8 +24,10 @@ pill_engine = { path = "../../engine/pill_engine" }
 pill_renderer_api = { path = "../../rendering/pill_renderer_api" }
 tracing = "0.1"
 # The start-up system report (`system_specs`). Here, not in the engine core:
-# see that module for why.
+# see that module for why. Desktop only: a device has no OS interface to read.
+[target.'cfg(not(target_os = "espidf"))'.dependencies]
 sysinfo = "0.39"
+
 metrics = { version = "0.24", optional = true }
 
 [features]

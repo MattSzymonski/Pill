@@ -1,0 +1,7 @@
+# Device build settings for the shipping binary.
+#
+# The main task runs the whole start-up on one stack: telemetry, the embedded
+# asset pack, the ECS and the project. ESP-IDF's default 3.5 KB overflows
+# before the first frame (observed on the ESP32-C6), so ask for 32 KB out of
+# the module's internal DRAM.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768

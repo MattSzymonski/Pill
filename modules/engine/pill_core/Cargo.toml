@@ -52,7 +52,6 @@ pill_core_macros = { path = "../pill_core_macros" }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
 serde_json = "1"
 thiserror = "2"
-miette = { version = "7", features = ["derive", "fancy"] }
 colored = "2"
 # The local date and time in log lines. `clock` reads the time zone on every
 # target; the web build adds `wasmbind` below to read it from the browser.
@@ -171,11 +170,25 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_SystemInformation",
 ] }
 
+# `miette`'s `fancy` feature pulls `terminal_size`, whose `rustix` call has no
+# implementation for `espidf` targets. The device keeps the graphical handler
+# (`fancy-base` is shared) but drops the terminal-size and backtrace probes.
+[target.'cfg(target_os = "espidf")'.dependencies]
+miette = { version = "7", features = ["derive", "fancy-no-syscall"] }
+
+[target.'cfg(not(target_os = "espidf"))'.dependencies]
+miette = { version = "7", features = ["derive", "fancy"] }
+
 # The platform layer (`src/platform`) on native: the rolling log file and
 # blocking on a future.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tracing-appender = "0.2"
 pollster = "0.4"
+
+# The daily rolling log file needs `symlink`, which the ESP-IDF C runtime does
+# not provide, so the device shares the web's no-file path (see
+# `platform::log_output`).
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "espidf")))'.dependencies]
+tracing-appender = "0.2"
 
 # The Unix half of the feature pin, added on 2026-11-06 for the Linux-only
 # drift that made every module fail to load with `undefined symbol`.

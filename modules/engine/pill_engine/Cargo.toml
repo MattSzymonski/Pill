@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 pill_engine_core = { path = "../pill_engine_core" }
 pill_core = { path = "../pill_core" }
-inventory = "0.3"
+inventory = "=0.3.24"
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

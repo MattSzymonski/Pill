@@ -257,9 +257,18 @@ STEPS: List[Step] = [
         ],
     ),
     Step(
+        "device-build",
+        "Device image (ESP32-C6, skipped without the ESP toolchain)",
+        # The whole device posture end to end, short of flashing: graph, std
+        # from source, the ESP-IDF link and the size budget. The suite skips
+        # itself, with a message, on a machine without the espup toolchain and
+        # an ESP-IDF checkout.
+        [[PYTHON, "devops/tests/test_device_build.py"]],
+        working_directory=REPOSITORY_ROOT,
+    ),
+    Step(
         "licenses",
-        "Third-party licenses (whole workspace)",
-        # Every crate any workspace member compiles, for the native host and
+        "Third-party licenses (whole workspace)",        # Every crate any workspace member compiles, for the native host and
         # the browser, must be under a license `modules/about.toml` accepts, so
         # a new dependency under an unreviewed license fails here rather than
         # at the next shipping build. The notices are written to build scratch

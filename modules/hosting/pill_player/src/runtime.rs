@@ -195,7 +195,9 @@ impl Runtime {
     /// start from it too.
     pub fn new() -> Self {
         // Report what machine the game is running on, so a user can see the
-        // CPU, memory, disks and OS it found.
+        // CPU, memory, disks and OS it found. The device has none of those
+        // to report (`sysinfo` reads desktop OS interfaces), so it skips it.
+        #[cfg(not(target_os = "espidf"))]
         crate::system_specs::report_machine_specs();
         Self {
             engine: Box::new(Engine::new()),

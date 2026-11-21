@@ -47,7 +47,9 @@ mod rendering;
 mod runtime;
 /// Statically linked project and module registration.
 mod static_project;
-/// The start-up report of the machine the engine runs on.
+/// The start-up report of the machine the engine runs on. Desktop only: it
+/// reads the OS through `sysinfo`, and a device has no such machine to report.
+#[cfg(not(target_os = "espidf"))]
 mod system_specs;
 /// Application telemetry bootstrap for every frontend.
 mod telemetry;

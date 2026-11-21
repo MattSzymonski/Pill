@@ -88,6 +88,24 @@ fn init_telemetry() {
 }
 
 // =============================================================================
+// Device Runtime Setup
+// =============================================================================
+
+/// Builds the Rayon global pool the device runs on.
+///
+/// Rayon's default pool takes its worker count from a CPU count the device
+/// reports as zero and its stack size from a desktop default. One worker with
+/// an explicit stack is what fits the internal DRAM, and building it here
+/// keeps anything else from spawning the default pool first.
+#[cfg(target_os = "espidf")]
+fn configure_device_thread_pool() {
+    let _ = pill_core::rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .stack_size(64 * 1024)
+        .build_global();
+}
+
+// =============================================================================
 // Reporting Boundary
 // =============================================================================
 
@@ -103,12 +121,41 @@ fn init_telemetry() {
 /// are missing or invalid. Otherwise, returns the styled [`engine_report`] of
 /// the failure that ended the run, after also logging that failure to the
 /// tracing output, so it can be matched with the active spans and log files.
-fn main() -> miette::Result<()> {
+fn run_standalone() -> miette::Result<()> {
     // Step 1: install the miette report handler before anything can fail.
     install_engine_report_handler();
     // Step 2: install the telemetry stack (best effort).
     init_telemetry();
-    // Step 3: get the project this build runs. A development build reads
+    // Step 3: the device's worker pool, before anything can touch Rayon.
+    #[cfg(target_os = "espidf")]
+    configure_device_thread_pool();
+    // Step 3: log the declarations the image carries. `inventory`'s
+    // constructors run before `main` on a static build, so they are already
+    // here; a device image with none means they were never emitted into
+    // `.init_array`, and the project then fails at its first system spawn.
+    #[cfg(feature = "shipping")]
+    {
+        let declarations = pill_engine::declarations::DeclarationBaseline::current();
+        pill_core::info!(
+            target: telemetry_target::ENGINE,
+            components = declarations.components,
+            systems = declarations.systems,
+            resources = declarations.resources,
+            assets = declarations.assets,
+            scripts = declarations.scripts,
+            value_types = declarations.value_types,
+            "declarations registered before the project starts"
+        );
+        #[cfg(target_os = "espidf")]
+        if declarations.components == 0 || declarations.systems == 0 {
+            return Err(miette::miette!(
+                "the device image registered no components or systems: \
+                 inventory's .init_array constructors did not run \
+                 (see modules/vendor/inventory/README.pill.md)"
+            ));
+        }
+    }
+    // Step 4: get the project this build runs. A development build reads
     // `PROJECT_PATH` and the project's `project_settings.yaml`. A shipping
     // build uses the generated bundle, which
     // `devops/tools/generate_shipping_bundle.py` writes from the same settings
@@ -118,7 +165,7 @@ fn main() -> miette::Result<()> {
     let project = pill_development_host::HostConfig::from_environment()?;
     #[cfg(feature = "shipping")]
     let project = pill_shipping_bundle::static_project();
-    // Step 4: run the project and turn a failure into one report.
+    // Step 5: run the project and turn a failure into one report.
     #[cfg(not(feature = "rendering"))]
     let project_run: Result<(), RunError> = headless_standalone::run(project);
     #[cfg(feature = "rendering")]
@@ -134,4 +181,33 @@ fn main() -> miette::Result<()> {
         );
         engine_report(error)
     })
+}
+
+// =============================================================================
+// Entry Points
+// =============================================================================
+
+/// Runs the standalone binary on a desktop.
+///
+/// The report's `Err` becomes the process exit code through `Termination`.
+#[cfg(not(target_os = "espidf"))]
+fn main() -> miette::Result<()> {
+    run_standalone()
+}
+
+/// The device entry point, called by `esp-idf-sys`'s `app_main`.
+///
+/// `link_patches` is what binds the crate's `main` to the C `app_main` the
+/// ESP-IDF runtime calls. Returning from here hands control back to ESP-IDF
+/// with nothing left to run, so a failure parks instead: the report goes to
+/// the UART and the board does not reboot-loop.
+#[cfg(target_os = "espidf")]
+fn main() {
+    esp_idf_sys::link_patches();
+    if let Err(report) = run_standalone() {
+        println!("pill_standalone stopped: {report}");
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
 }

@@ -808,7 +808,9 @@ fn write_then_place(
 /// A sibling name for `file_name` that no other writer in this or another
 /// process picks at the same time.
 fn temporary_name(file_name: &std::ffi::OsStr) -> std::ffi::OsString {
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // A `u32` because 32-bit targets such as the device build have no 64-bit
+    // atomics. It only has to keep siblings apart within one process.
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut name = std::ffi::OsString::from(".");
     name.push(file_name);

@@ -623,9 +623,13 @@ impl Engine {
 
         // Warm up the Rayon thread pool so the first parallel batch
         // does not pay thread-spawning costs (can be 1-10ms on some OS).
+        // The device configures its single worker before the engine is built,
+        // so a `broadcast` here would only spawn the default pool first.
+        #[cfg(not(target_os = "espidf"))]
         rayon::broadcast(|_ctx| {});
 
         // Print the active parallel-iteration knobs.
+        #[cfg(not(target_os = "espidf"))]
         crate::config::print_parallel_config();
 
         // Resources the engine owns. They exist before any project or module

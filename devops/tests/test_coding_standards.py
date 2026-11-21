@@ -102,6 +102,10 @@ EXCLUDED_DIRECTORY_NAMES = {
     ".git",
     "pill_standalone_temp",
     "build",
+    # Third-party source the repository carries to patch one line (the
+    # `inventory` copy under `modules/vendor`). It is upstream's code, not
+    # ours to restyle.
+    "vendor",
     # The host writes `host_module_*` wrappers and `host_project_*` members at
     # runtime; both are gitignored, the guard hook refuses edits to them, and
     # a git-ignored file can never reach the changed-files hook - so linting

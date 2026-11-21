@@ -52,6 +52,15 @@
 #   artifacts are copied to `<project_root>/build/<timestamp>/` (e.g.
 #   build/01-09-2026_16-57).
 #
+#   A non-host `--target` (for example `riscv32imac-esp-espidf`) turns the same
+#   command into a device build: the profile defaults to `release-embedded`
+#   (`panic = "abort"`), std is built from source with the espup `esp`
+#   toolchain, the linked ELF is the artifact, and the host's DLL sidecars and
+#   PE size report do not apply. Cargo's target directory moves to a short
+#   top-level path (`PILL_DEVICE_TARGET_DIR`, `<drive>:\p` by default) because
+#   `esp-idf-sys` refuses an output directory longer than 88 characters on
+#   Windows; the artifacts still land under the project.
+#
 #   A shipping host build also writes the third-party license notices into
 #   `licenses/` beside the binary (devops/tools/generate_third_party_licenses.py:
 #   every crate compiled in, the Rust standard library and, with --csharp-aot,
@@ -79,6 +88,14 @@
 #                              PE section layout (always), then per-crate and
 #                              top-function attribution via cargo-bloat when
 #                              it is installed (cargo install cargo-bloat).
+#          --target <triple>   Build for another target. A non-host triple is a
+#                              device build: cargo runs through the `esp`
+#                              toolchain with `-Zbuild-std=std,panic_abort`,
+#                              the profile defaults to `release-embedded`, the
+#                              linked ELF is copied instead of the host binary
+#                              and its DLL sidecars, and a C# project or
+#                              `--csharp-aot` is refused (no CLR on the
+#                              device).
 #          --csharp-aot        For a managed C# project, ship the NativeAOT
 #                              posture: `dotnet publish -p:PublishAot=true`
 #                              produces one self-contained native library (no
@@ -142,6 +159,38 @@ MISC_ARTIFACT_SUFFIXES = (".pdb", ".exp", ".lib")
 # The `pill_standalone` feature that selects the shipping posture: the runtime
 # and the generated bundle, and no development host.
 SHIPPING_FEATURE = "shipping"
+
+# The profile a cross target builds with: the release profile plus
+# `panic = "abort"`, which the ESP-IDF runtime needs (it ships no unwinder).
+EMBEDDED_PROFILE = "release-embedded"
+
+# Where a device build puts cargo's target directory, when nothing else is
+# asked for. `esp-idf-sys` refuses an output directory longer than 88
+# characters on Windows and its own tail is 79 of them, so the project's
+# `build/build_meta/...` tree cannot host it: the device build needs a
+# top-level directory. Override with this environment variable.
+DEVICE_TARGET_DIR_ENV = "PILL_DEVICE_TARGET_DIR"
+
+# The chip each device triple builds for. `riscv32imac-esp-espidf` fits the
+# ESP32-H2, -C5 and -C6, so `esp-idf-sys` refuses to guess and needs `MCU`
+# named; the C6 is the board this project targets. A triple missing here is
+# left to the caller's environment.
+DEVICE_MCUS = {
+    "riscv32imac-esp-espidf": "esp32c6",
+    "xtensa-esp32s3-espidf": "esp32s3",
+}
+
+# The device build's sdkconfig defaults: the settings the image needs and the
+# ESP-IDF defaults do not carry, such as the main task's stack size.
+DEVICE_SDKCONFIG_DEFAULTS = (
+    Path("modules") / "frontends" / "pill_standalone" / "device" / "sdkconfig.defaults"
+)
+
+# The device image's recorded size budget, in bytes: the loaded flash image
+# (the `.flash.*` sections) and the internal RAM it occupies (`.iram0.*` plus
+# `.dram0.*`). A build over either fails. Recorded from the first measured
+# headless image: 1,458,938 flash and 47,794 RAM on the ESP32-C6.
+DEVICE_SIZE_BUDGET = {"flash_bytes": 1_800_000, "ram_bytes": 100_000}
 
 # Writes the third-party license notices of a shipping build, and the exit
 # code it returns when cargo-about is not installed.
@@ -281,6 +330,32 @@ def dotnet_rid() -> str:
     return "linux-arm64" if arm else "linux-x64"
 
 
+def host_target_triple() -> Optional[str]:
+    """The triple rustc reports for its host, or None when it cannot be asked."""
+    return rustc_verbose_info().get("host")
+
+
+def is_device_target(target: Optional[str]) -> bool:
+    """Whether `target` names a cross target rather than the host build."""
+    return bool(target) and target != host_target_triple()
+
+
+def device_target_directory(repository_root: Path) -> Path:
+    """The short target directory a device build must use on Windows.
+
+    `esp-idf-sys` refuses an output directory longer than 88 characters, and
+    its own `\\riscv32imac-esp-espidf\\release-embedded\\build\\esp-idf-sys-...\\out`
+    tail is 79 of them, so the project's `build/build_meta/...` tree cannot
+    host it. The default is a one-letter directory on the repository's drive;
+    set `PILL_DEVICE_TARGET_DIR` to choose another short path.
+    """
+    override = os.environ.get(DEVICE_TARGET_DIR_ENV)
+    if override:
+        return Path(override)
+    drive = repository_root.drive or "C:"
+    return Path(f"{drive}\\p")
+
+
 def resolve_project_root(repository_root: Path, project_path: str) -> Path:
     """Resolves the project directory, honouring both path conventions.
 
@@ -329,16 +404,21 @@ def copy_shipping_artifacts(
     artifacts_directory: Path,
     build_binary_name: str,
     profile_name: str,
+    target: Optional[str] = None,
 ) -> list:
     """Copies the built shipping binary and its sidecars into a dated directory.
 
     The binary and PDB are renamed to the project's `build_binary_name`;
     sidecars keep theirs. Cargo writes each release profile into a directory
     of its own name (`release`, `release-fast`, `release-with-debug`), so the
-    profile picks where to look. Returns the names copied (empty when the
-    build produced nothing to copy).
+    profile picks where to look, and a cross target adds a directory named
+    after the triple. A cross build ships the ELF alone: the `std-*.dll`
+    sidecars are a Windows host convention. Returns the names copied (empty
+    when the build produced nothing to copy).
     """
     release_directory = target_directory / profile_name
+    if target:
+        release_directory = target_directory / target / profile_name
     extension = ".exe" if os.name == "nt" else ""
     artifacts_directory.mkdir(parents=True, exist_ok=True)
     copied = []
@@ -347,6 +427,10 @@ def copy_shipping_artifacts(
         if source.is_file():
             shutil.copy2(source, artifacts_directory / target_name)
             copied.append(target_name)
+
+    if target:
+        copy_renamed(release_directory / "pill_standalone", f"{build_binary_name}.elf")
+        return copied
 
     copy_renamed(
         release_directory / f"pill_standalone{extension}",
@@ -488,12 +572,15 @@ def rustc_verbose_info() -> dict:
     return info
 
 
-def target_platform() -> str:
-    """Returns the rustc host target triple (e.g. x86_64-pc-windows-msvc).
+def target_platform(build_target: Optional[str] = None) -> str:
+    """Returns the triple the build produces: the requested one, else the host.
 
-    Falls back to the OS name and machine architecture when rustc cannot be
-    queried.
+    The report names what was built, so a cross build shows the device triple
+    and not the machine that happened to run the script. Falls back to the OS
+    name and machine architecture when rustc cannot be queried.
     """
+    if build_target:
+        return build_target
     host = rustc_verbose_info().get("host")
     if host:
         return host
@@ -889,6 +976,12 @@ class BuildRequest:
     managed_manifest: Optional[Path]
     analyze_size: bool
     start_time: float
+    target: Optional[str]
+
+    @property
+    def profile_name(self) -> str:
+        """The profile cargo really builds with, defaulted profile included."""
+        return extract_profile(self.profile_arguments + self.arguments)
 
 
 def resolve_build_request(argv: List[str]) -> BuildRequest:
@@ -929,6 +1022,14 @@ def resolve_build_request(argv: List[str]) -> BuildRequest:
             "PROJECT_PATH at a directory with a .csproj"
         )
 
+    target = extract_target(arguments)
+    if is_device_target(target) and (managed or aot):
+        raise BuildRequestError(
+            f"the device target {target} is Rust-only: it has no CLR and no "
+            "NativeAOT, so a C# shipping project or --csharp-aot cannot be "
+            "built for it"
+        )
+
     target_directory = None
     artifacts_directory = None
     if shipping:
@@ -949,6 +1050,8 @@ def resolve_build_request(argv: List[str]) -> BuildRequest:
                 "project_settings.yaml)."
             )
         target_directory = project_root / "build" / "build_meta" / "pill_build_data"
+        if is_device_target(target):
+            target_directory = device_target_directory(repository_root)
         artifacts_directory = (
             project_root / "build" / datetime.datetime.now().strftime("%d-%m-%Y_%H-%M")
         )
@@ -966,7 +1069,12 @@ def resolve_build_request(argv: List[str]) -> BuildRequest:
         argument == "--profile" or argument.startswith("--profile=")
         for argument in arguments
     )
-    profile_arguments = [] if profile_already_chosen else ["--release"]
+    if profile_already_chosen:
+        profile_arguments = []
+    elif is_device_target(target):
+        profile_arguments = ["--profile", EMBEDDED_PROFILE]
+    else:
+        profile_arguments = ["--release"]
 
     return BuildRequest(
         repository_root=repository_root,
@@ -986,6 +1094,7 @@ def resolve_build_request(argv: List[str]) -> BuildRequest:
         managed_manifest=managed_manifest,
         analyze_size=analyze_size,
         start_time=start_time,
+        target=target,
     )
 
 
@@ -1095,6 +1204,92 @@ def refuse_host_release(request: BuildRequest) -> int:
     return 0
 
 
+def report_device_size(request: BuildRequest, elf_path: Path) -> int:
+    """Prints the device image's flash and RAM cost, and enforces the budget.
+
+    Returns 1 when either budget is exceeded, 0 otherwise (including when the
+    `size` tool is missing: a missing tool must not fail a build).
+    """
+    size_tool = find_device_size_tool(request.target)
+    if size_tool is None:
+        print(
+            "device size report skipped: no riscv32/xtensa `size` tool found",
+            file=sys.stderr,
+        )
+        return 0
+    sections = device_size_sections(elf_path, size_tool)
+    if sections is None:
+        print(
+            f"device size report skipped: `{size_tool}` could not read "
+            f"{elf_path.name}",
+            file=sys.stderr,
+        )
+        return 0
+    print()
+    print(f"device size: {elf_path.name}")
+    for key, label in (("flash_bytes", "flash image"), ("ram_bytes", "internal RAM")):
+        used = sections[key]
+        budget = DEVICE_SIZE_BUDGET[key]
+        print(
+            f"  {label:<13} {human_readable_size(used):>10}  "
+            f"budget {human_readable_size(budget)}"
+        )
+    over = [
+        key for key in DEVICE_SIZE_BUDGET if sections[key] > DEVICE_SIZE_BUDGET[key]
+    ]
+    if over:
+        print(
+            "error: the device image exceeds its size budget in: "
+            + ", ".join(over),
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def find_device_size_tool(target: Optional[str]) -> Optional[str]:
+    """The `size` tool for a device target, from PATH or the Espressif tools."""
+    prefix = "xtensa" if (target or "").startswith("xtensa") else "riscv32"
+    tool_name = f"{prefix}-esp-elf-size"
+    found = shutil.which(tool_name)
+    if found:
+        return found
+    tools_root = (
+        Path(os.environ.get("IDF_TOOLS_PATH") or (Path.home() / ".espressif"))
+        / "tools"
+        / f"{prefix}-esp-elf"
+    )
+    candidates = sorted(tools_root.glob(f"*/*/bin/{tool_name}.exe"), reverse=True)
+    return str(candidates[0]) if candidates else None
+
+
+def device_size_sections(elf_path: Path, size_tool: str) -> Optional[dict]:
+    """Sums the loaded flash image and internal RAM from `size -A`."""
+    completed = subprocess.run(
+        [size_tool, "-A", str(elf_path)], capture_output=True, text=True
+    )
+    if completed.returncode != 0:
+        return None
+    flash_bytes = 0
+    ram_bytes = 0
+    for line in completed.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or not parts[0].startswith("."):
+            continue
+        name = parts[0]
+        try:
+            size = int(parts[1], 0)
+        except ValueError:
+            continue
+        if "dummy" in name:
+            continue
+        if name.startswith(".flash."):
+            flash_bytes += size
+        elif name.startswith((".iram0.", ".dram0.")):
+            ram_bytes += size
+    return {"flash_bytes": flash_bytes, "ram_bytes": ram_bytes}
+
+
 def run_cargo(request: BuildRequest) -> subprocess.CompletedProcess:
     """Runs the release profile build with `RUSTFLAGS` cleared."""
     print("Building the release profile with RUSTFLAGS cleared.")
@@ -1106,13 +1301,40 @@ def run_cargo(request: BuildRequest) -> subprocess.CompletedProcess:
     environment = dict(os.environ, RUSTFLAGS="")
     if request.target_directory is not None:
         environment["CARGO_TARGET_DIR"] = str(request.target_directory)
-    command = [
-        "cargo",
+    device_target = is_device_target(request.target)
+    if device_target:
+        # No installed toolchain ships a device std, so it is built from
+        # source: `+esp` is the espup toolchain, which carries the target.
+        print(f"  device target: {request.target} (std built from source)")
+        # A triple that fits more than one chip needs the chip named; an
+        # explicit `MCU` in the environment wins.
+        mcu = DEVICE_MCUS.get(request.target)
+        if mcu and "MCU" not in os.environ:
+            environment["MCU"] = mcu
+        # An espidf image links through `ldproxy`, which rewrites the linker
+        # arguments for ESP-IDF and then calls the toolchain's gcc. The
+        # toolchain's own target spec names the bare gcc, which cannot read
+        # those arguments, and the workspace config must stay host-only.
+        triple_key = request.target.upper().replace("-", "_")
+        environment[f"CARGO_TARGET_{triple_key}_LINKER"] = "ldproxy"
+        # The image's own ESP-IDF settings; the caller's environment wins.
+        sdkconfig_defaults = request.repository_root / DEVICE_SDKCONFIG_DEFAULTS
+        if (
+            sdkconfig_defaults.is_file()
+            and "ESP_IDF_SDKCONFIG_DEFAULTS" not in os.environ
+        ):
+            environment["ESP_IDF_SDKCONFIG_DEFAULTS"] = str(sdkconfig_defaults)
+    command = ["cargo"]
+    if device_target:
+        command.append("+esp")
+    command += [
         "build",
         "--offline",
         *request.profile_arguments,
         *request.arguments,
     ]
+    if device_target:
+        command.append("-Zbuild-std=std,panic_abort")
     return subprocess.run(command, cwd=str(request.workspace_directory), env=environment)
 
 
@@ -1126,7 +1348,8 @@ def copy_and_prune_artifacts(
         request.target_directory,
         request.artifacts_directory,
         request.build_binary_name,
-        extract_profile(request.arguments),
+        request.profile_name,
+        request.target,
     )
     if request.managed:
         copied_artifacts += copy_managed_artifacts(
@@ -1206,8 +1429,8 @@ def print_build_report(request: BuildRequest, copied_artifacts: List[str]) -> No
             value = project_settings.get(key)
             if value:
                 branches.append((f"{key}: {value}", None))
-    branches.append((f"platform: {target_platform()}", None))
-    branches.append((f"profile: {extract_profile(request.arguments)}", None))
+    branches.append((f"platform: {target_platform(request.target)}", None))
+    branches.append((f"profile: {request.profile_name}", None))
     features = sorted(request.requested_features)
     branches.append(
         (f"features: {', '.join(features) if features else '(none)'}", None)
@@ -1268,6 +1491,13 @@ def analyze_size(
 ) -> None:
     """Optionally deep-dives into what makes up the executable."""
     if not request.analyze_size or completed.returncode != 0:
+        return
+    if is_device_target(request.target):
+        print(
+            "--analyze_size skipped: the analysis reads PE sections, and the "
+            "device ELF gets its own section report with the size baseline.",
+            file=sys.stderr,
+        )
         return
     if copied_artifacts:
         executable_names = [
@@ -1331,6 +1561,13 @@ def main() -> int:
 
     if completed.returncode == 0:
         print_build_report(request, copied_artifacts)
+        elf_names = [name for name in copied_artifacts if name.endswith(".elf")]
+        if is_device_target(request.target) and elf_names:
+            over_budget = report_device_size(
+                request, request.artifacts_directory / elf_names[0]
+            )
+            if over_budget != 0:
+                return over_budget
 
     analyze_size(request, completed, copied_artifacts)
     return completed.returncode

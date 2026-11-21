@@ -4,9 +4,9 @@
 //!
 //! - Provide the terminal writer: stdout on native, the browser console on the
 //!   web.
-//! - Start the file writer: on native, a log that goes to a new file each day,
-//!   written by a background thread. The web has no filesystem, so it reports
-//!   an error.
+//! - Start the file writer: on a desktop, a log that goes to a new file each
+//!   day, written by a background thread. The web and the device have no log
+//!   file, so they report an error.
 //!
 //! # Design
 //!
@@ -35,23 +35,23 @@ pub type TerminalWriter = fn() -> std::io::Stdout;
 #[cfg(target_arch = "wasm32")]
 pub type TerminalWriter = ConsoleWriter;
 
-/// The file writer on native: a non-blocking writer over a log that is split
-/// into one file per day.
-#[cfg(not(target_arch = "wasm32"))]
+/// The file writer on a target with a writable filesystem: a non-blocking
+/// writer over a log that is split into one file per day.
+#[cfg(not(any(target_arch = "wasm32", target_os = "espidf")))]
 pub type FileWriter = tracing_appender::non_blocking::NonBlocking;
 
-/// The file writer on the web, which has no filesystem: writing goes to a sink
-/// that discards everything.
-#[cfg(target_arch = "wasm32")]
+/// The file writer where there is no log file to write: the web and the
+/// device both discard every line.
+#[cfg(any(target_arch = "wasm32", target_os = "espidf"))]
 pub type FileWriter = fn() -> std::io::Sink;
 
 /// Keeps the file writer's background thread alive. Dropping it writes out the
 /// lines still waiting in the buffer.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "espidf")))]
 pub type FileGuard = tracing_appender::non_blocking::WorkerGuard;
 
-/// The web has no file writer, so there is nothing to keep alive.
-#[cfg(target_arch = "wasm32")]
+/// Without a file writer there is nothing to keep alive.
+#[cfg(any(target_arch = "wasm32", target_os = "espidf"))]
 pub type FileGuard = ();
 
 /// The browser console, used as the terminal layer's `tracing` writer.
@@ -152,7 +152,7 @@ pub fn terminal_writer() -> TerminalWriter {
 ///
 /// Returns the failure message when the directory or the file cannot be
 /// created.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "espidf")))]
 pub fn open_file_output(
     directory: &Path,
     file_name: &str,
@@ -170,18 +170,18 @@ pub fn open_file_output(
     Ok(tracing_appender::non_blocking(appender))
 }
 
-/// Opens the file writer, which the web does not have.
+/// Opens the file writer, which targets without a writable filesystem lack.
 ///
 /// # Errors
 ///
-/// Always returns an error: the web has no filesystem to write logs to.
-#[cfg(target_arch = "wasm32")]
+/// Always returns an error: the web and the device have no log file to write.
+#[cfg(any(target_arch = "wasm32", target_os = "espidf"))]
 pub fn open_file_output(
     directory: &Path,
     file_name: &str,
 ) -> Result<(FileWriter, FileGuard), String> {
     Err(format!(
-        "cannot write log file `{file_name}` to `{}`: the web has no filesystem",
+        "cannot write log file `{file_name}` to `{}`: this target has no writable filesystem",
         directory.display()
     ))
 }

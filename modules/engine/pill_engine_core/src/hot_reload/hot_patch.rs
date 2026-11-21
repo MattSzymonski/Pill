@@ -55,8 +55,8 @@
 // Standard library
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 // Current crate
 use crate::system::{SystemParam, SystemParamFunction};
@@ -253,7 +253,10 @@ pub struct HotSlot {
     /// `fn(&mut F, Input) -> F::Output`.
     current: AtomicUsize,
     /// Signature identity of the system this slot was created for.
-    signature_hash: AtomicU64,
+    ///
+    /// A `RwLock` rather than an atomic because the device build has no 64-bit
+    /// atomics: the hash keeps all 64 bits, and a lock is the price of that.
+    signature_hash: RwLock<u64>,
     /// The implementation recorded at registration, kept so a rollback can
     /// return to the code the registering artifact was built with.
     ///
@@ -268,7 +271,7 @@ impl HotSlot {
     pub fn new() -> Self {
         Self {
             current: AtomicUsize::new(0),
-            signature_hash: AtomicU64::new(0),
+            signature_hash: RwLock::new(0),
             original: AtomicUsize::new(0),
         }
     }
@@ -280,7 +283,10 @@ impl HotSlot {
     /// concrete `F` and `Input` are known.
     pub fn initialize(&self, address: usize, signature_hash: u64) {
         self.current.store(address, Ordering::Release);
-        self.signature_hash.store(signature_hash, Ordering::Release);
+        *self
+            .signature_hash
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = signature_hash;
         // Stored unconditionally, not only when empty: a reload builds a fresh
         // slot for the new artifact, and its baseline is that artifact's code.
         self.original.store(address, Ordering::Release);
@@ -309,7 +315,10 @@ impl HotSlot {
 
     /// Signature identity this slot was registered with.
     pub fn signature_hash(&self) -> u64 {
-        self.signature_hash.load(Ordering::Acquire)
+        *self
+            .signature_hash
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Replaces the implementation, refusing a replacement whose signature
@@ -332,7 +341,10 @@ impl HotSlot {
                 name: name.to_string(),
             });
         }
-        let expected = self.signature_hash.load(Ordering::Acquire);
+        let expected = *self
+            .signature_hash
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if expected != signature_hash {
             return Err(HotPatchError::SignatureMismatch {
                 name: name.to_string(),
@@ -596,18 +608,18 @@ const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 /// but nothing enforces the rule if it is only written down. Recording the
 /// thread makes it checkable: a second thread that attempts a patch is refused
 /// instead of racing the first.
-static PATCHING_THREAD_TOKEN: AtomicU64 = AtomicU64::new(0);
+static PATCHING_THREAD_TOKEN: AtomicUsize = AtomicUsize::new(0);
 
 /// A numeric identity for the current thread.
 ///
 /// `ThreadId` has no stable integer form on stable Rust, so the address of a
 /// thread-local is used instead. It is different for each thread and stays the
 /// same within one.
-fn current_thread_token() -> u64 {
+fn current_thread_token() -> usize {
     thread_local! {
         static MARKER: u8 = const { 0 };
     }
-    MARKER.with(|marker| marker as *const u8 as u64)
+    MARKER.with(|marker| marker as *const u8 as usize)
 }
 
 /// Declares the calling thread the only one permitted to rewrite live code.

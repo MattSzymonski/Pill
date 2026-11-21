@@ -28,7 +28,29 @@ Designed from the ground up around performance, modularity and a frictionless de
 - **Tiny build sizes**
 - **Absolute streaming beast**
 - **Blazing startup times**
-- **Embedded device support**
+- **Embedded device support (Rust projects, headless, ESP32-C6 today)**
+
+## Device builds
+
+A Rust project can ship as one standalone headless image for the ESP32-C6
+(`riscv32imac-esp-espidf`): no renderer, no development host, no C# runtime.
+The ESP-IDF runtime links with it and `app_main` runs the same project the
+desktop build runs.
+
+```shell
+set ESP_IDF_PATH=C:\Users\<you>\.espressif\esp-idf\v5.1.3
+python devops/ci_cd/build_shipping.py --project examples/headless/headless_rust --target riscv32imac-esp-espidf
+espflash flash --chip esp32c6 --port COM4 examples/headless/headless_rust/build/<date>/<name>.elf
+```
+
+What the build needs: the espup `esp` Rust toolchain, ESP-IDF 5.1.3 with the
+`riscv32-esp-elf` toolchain, and `ldproxy` and `espflash` on `PATH`. The image
+keeps a default budget of 1.7 MB of flash and 97.7 KB of internal RAM, which
+the build enforces; the headless example measures 1.4 MB and 46.7 KB. A C#
+project is refused for a device target before anything is built.
+
+The device image is Rust-only. There is no CLR and no NativeAOT for these
+chips, so scripting on a device is not offered.
 
 ## Links
 **Discover Pill at [PillEngine.org](https://pillengine.org)**
