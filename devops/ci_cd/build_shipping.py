@@ -202,9 +202,23 @@ DEVICE_FLASH_BINARIES = ("bootloader.bin", "partition-table.bin")
 
 # The device image's recorded size budget, in bytes: the loaded flash image
 # (the `.flash.*` sections) and the internal RAM it occupies (`.iram0.*` plus
-# `.dram0.*`). A build over either fails. Recorded from the first measured
-# headless image: 1,458,938 flash and 47,794 RAM on the ESP32-C6.
+# `.dram0.*`). A build over either fails. The flash budget is normally derived
+# from the partition table the build declares (see `factory_partition`); the
+# value here is what the RAM side always uses and the flash fallback when that
+# table cannot be read.
 DEVICE_SIZE_BUDGET = {"flash_bytes": 1_800_000, "ram_bytes": 100_000}
+
+# How much of the factory app partition the flash budget allows the image to
+# use. The rest is slack the partition needs at flash time (segment padding,
+# the image header) and room to grow between devices.
+DEVICE_FLASH_BUDGET_PERCENT = 90
+
+# A partition-table entry is magic (2 bytes), type, subtype, offset, size, label
+# (16 bytes) and flags; the table ends at the first entry without the magic.
+PARTITION_ENTRY_BYTES = 32
+PARTITION_MAGIC = b"\xaa\x50"
+PARTITION_TYPE_APP = 0x00
+PARTITION_SUBTYPE_FACTORY = 0x00
 
 # Writes the third-party license notices of a shipping build, and the exit
 # code it returns when cargo-about is not installed.
@@ -1273,8 +1287,46 @@ def refuse_host_release(request: BuildRequest) -> int:
     return 0
 
 
+def read_partition_table(path: Path) -> List[dict]:
+    """The entries of an ESP-IDF partition table binary."""
+    data = path.read_bytes()
+    entries = []
+    for start in range(0, len(data) - PARTITION_ENTRY_BYTES + 1, PARTITION_ENTRY_BYTES):
+        entry = data[start : start + PARTITION_ENTRY_BYTES]
+        if entry[:2] != PARTITION_MAGIC:
+            break
+        entries.append(
+            {
+                "type": entry[2],
+                "subtype": entry[3],
+                "offset": int.from_bytes(entry[4:8], "little"),
+                "size": int.from_bytes(entry[8:12], "little"),
+                "label": entry[12:28].rstrip(b"\0").decode("ascii", "replace"),
+            }
+        )
+    return entries
+
+
+def factory_partition(partition_table: Path) -> Optional[int]:
+    """The size of the factory app partition in a table, or None without one."""
+    if not partition_table.is_file():
+        return None
+    for entry in read_partition_table(partition_table):
+        if (
+            entry["type"] == PARTITION_TYPE_APP
+            and entry["subtype"] == PARTITION_SUBTYPE_FACTORY
+        ):
+            return entry["size"]
+    return None
+
+
 def report_device_size(request: BuildRequest, elf_path: Path) -> int:
     """Prints the device image's flash and RAM cost, and enforces the budget.
+
+    The flash budget is a share of the factory partition the build declares, so
+    a layout change moves it: a budget fixed by hand could sit above the very
+    partition it was meant to protect. The RAM budget stays absolute - it is
+    about the chip, not about a partition.
 
     Returns 1 when either budget is exceeded, 0 otherwise (including when the
     `size` tool is missing: a missing tool must not fail a build).
@@ -1294,22 +1346,33 @@ def report_device_size(request: BuildRequest, elf_path: Path) -> int:
             file=sys.stderr,
         )
         return 0
+    budget = dict(DEVICE_SIZE_BUDGET)
+    notes = {"flash_bytes": "", "ram_bytes": ""}
+    room = factory_partition(request.artifacts_directory / "partition-table.bin")
+    if room is None:
+        print(
+            "device flash budget: no partition table in the bundle, falling "
+            f"back to {human_readable_size(budget['flash_bytes'])}",
+            file=sys.stderr,
+        )
+    else:
+        budget["flash_bytes"] = room * DEVICE_FLASH_BUDGET_PERCENT // 100
+        notes["flash_bytes"] = (
+            f" = {DEVICE_FLASH_BUDGET_PERCENT}% of the "
+            f"{human_readable_size(room)} factory partition"
+        )
     print()
     print(f"device size: {elf_path.name}")
     for key, label in (("flash_bytes", "flash image"), ("ram_bytes", "internal RAM")):
-        used = sections[key]
-        budget = DEVICE_SIZE_BUDGET[key]
         print(
-            f"  {label:<13} {human_readable_size(used):>10}  "
-            f"budget {human_readable_size(budget)}"
+            f"  {label:<13} {human_readable_size(sections[key]):>10}  "
+            f"budget {human_readable_size(budget[key])}{notes[key]}"
         )
-    over = [
-        key for key in DEVICE_SIZE_BUDGET if sections[key] > DEVICE_SIZE_BUDGET[key]
-    ]
+    over = [key for key in budget if sections[key] > budget[key]]
     if over:
         print(
             "error: the device image exceeds its size budget in: "
-            + ", ".join(over),
+            + ", ".join(f"{key}{notes[key]}" for key in over),
             file=sys.stderr,
         )
         return 1
