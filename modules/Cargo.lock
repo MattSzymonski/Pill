@@ -1497,15 +1497,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "headless_rust"
-version = "0.1.0"
-dependencies = [
- "pill_engine",
- "serde",
- "trait_type_map",
-]
-
-[[package]]
 name = "heapless"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3292,10 +3283,6 @@ dependencies = [
 [[package]]
 name = "pill_shipping_bundle"
 version = "0.0.0"
-dependencies = [
- "headless_rust",
- "pill_player",
-]
 
 [[package]]
 name = "pill_spline"
