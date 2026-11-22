@@ -194,6 +194,12 @@ DEVICE_PARTITION_CSV = (
     Path("modules") / "frontends" / "pill_standalone" / "device" / "partitions.csv"
 )
 
+# The flash layout ESP-IDF generates beside a device image. `esp-idf-sys` leaves
+# both at the top of the device target directory; a bundle that leaves them out
+# cannot be flashed onto a bare board, because the flashing tool falls back to a
+# bootloader and a table of its own.
+DEVICE_FLASH_BINARIES = ("bootloader.bin", "partition-table.bin")
+
 # The device image's recorded size budget, in bytes: the loaded flash image
 # (the `.flash.*` sections) and the internal RAM it occupies (`.iram0.*` plus
 # `.dram0.*`). A build over either fails. Recorded from the first measured
@@ -461,6 +467,7 @@ def copy_shipping_artifacts(
     build_binary_name: str,
     profile_name: str,
     target: Optional[str] = None,
+    partition_csv: Optional[Path] = None,
 ) -> list:
     """Copies the built shipping binary and its sidecars into a dated directory.
 
@@ -468,9 +475,11 @@ def copy_shipping_artifacts(
     sidecars keep theirs. Cargo writes each release profile into a directory
     of its own name (`release`, `release-fast`, `release-with-debug`), so the
     profile picks where to look, and a cross target adds a directory named
-    after the triple. A cross build ships the ELF alone: the `std-*.dll`
-    sidecars are a Windows host convention. Returns the names copied (empty
-    when the build produced nothing to copy).
+    after the triple. A cross build ships the ELF and the flash layout ESP-IDF
+    generated beside it - its bootloader, its partition table and, when given,
+    the CSV behind that table - because the host's `std-*.dll` sidecars are a
+    Windows convention and a bare board needs the layout to boot at all.
+    Returns the names copied (empty when the build produced nothing to copy).
     """
     release_directory = target_directory / profile_name
     if target:
@@ -486,6 +495,10 @@ def copy_shipping_artifacts(
 
     if target:
         copy_renamed(release_directory / "pill_standalone", f"{build_binary_name}.elf")
+        for name in DEVICE_FLASH_BINARIES:
+            copy_renamed(release_directory / name, name)
+        if partition_csv is not None:
+            copy_renamed(partition_csv, partition_csv.name)
         return copied
 
     copy_renamed(
@@ -1406,6 +1419,11 @@ def copy_and_prune_artifacts(
         request.build_binary_name,
         request.profile_name,
         request.target,
+        partition_csv=(
+            request.repository_root / DEVICE_PARTITION_CSV
+            if is_device_target(request.target)
+            else None
+        ),
     )
     if request.managed:
         copied_artifacts += copy_managed_artifacts(
