@@ -14,7 +14,7 @@
 # tree still works.
 #
 # Enable it once per clone:
-#   git config --local core.hooksPath devops/git-hooks
+#   git config --local core.hooksPath devops/hooks
 
 set -e
 stub_refused=0
@@ -91,7 +91,7 @@ if [ "$stub_refused" -ne 0 ]; then
     echo "put the stub back first: python devops/tools/generate_shipping_bundle.py --restore-stub" >&2
 fi
 if [ "$size_refused" -ne 0 ]; then
-    echo "split the file, or raise SIZE_LIMIT_BYTES in devops/git-hooks/policy.env" >&2
+    echo "split the file, or raise SIZE_LIMIT_BYTES in devops/hooks/policy.env" >&2
 fi
 if [ "$examples_refused" -ne 0 ]; then
     echo "allowed example projects: $EXAMPLE_PROJECTS" >&2

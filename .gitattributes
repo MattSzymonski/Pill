@@ -30,7 +30,7 @@
 Dockerfile*    text eol=lf
 
 # Git hooks run under `sh`, which refuses a CRLF script.
-devops/git-hooks/*     text eol=lf
+devops/hooks/*     text eol=lf
 
 # License texts: the official texts are reproduced byte for byte, so their
 # line endings must not change on checkout.

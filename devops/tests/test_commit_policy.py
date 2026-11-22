@@ -15,7 +15,7 @@ REQUIREMENTS
     still checks the example projects.
 
 DESCRIPTION
-    Reads `devops/git-hooks/policy.env`, the single source of truth shared with
+    Reads `devops/hooks/policy.env`, the single source of truth shared with
     the pre-commit hook, and checks two things.
 
     Example projects: every tracked path under `examples/` must sit in one of
@@ -48,7 +48,7 @@ from typing import Dict, List, Optional
 # =============================================================================
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent.parent
-POLICY_FILE = Path("devops") / "git-hooks" / "policy.env"
+POLICY_FILE = Path("devops") / "hooks" / "policy.env"
 
 # The refs the size check compares against, in the order they are tried. The
 # branch's own upstream wins: a long-lived branch cut from `main` months ago
