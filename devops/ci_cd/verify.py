@@ -230,6 +230,17 @@ STEPS: List[Step] = [
         quick=True,
     ),
     Step(
+        "commit-policy",
+        "Commit policy (example projects, added-file size)",
+        # The same two rules the pre-commit hook applies, for the clones that
+        # never enabled it: a branch cannot merge an unlisted example project or
+        # a newly added oversized file even when no local hook ran. Only added
+        # files are measured, so editing an existing large file is not a failure.
+        [[PYTHON, "devops/tests/test_commit_policy.py"]],
+        working_directory=REPOSITORY_ROOT,
+        quick=True,
+    ),
+    Step(
         "check-shipping",
         "Clippy (shipping posture)",
         # `-p pill_standalone` alone: with `--workspace`, `pill_editor` would

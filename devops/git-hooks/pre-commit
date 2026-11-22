@@ -1,14 +1,17 @@
 #!/bin/sh
-# Refuses a commit that would carry a generated shipping bundle.
+# Refuses a commit that breaks the repository's commit policy:
 #
-# The bundle crate must stay the project-agnostic stub: a generated one makes
-# the shipping posture type-check against whichever project was generated last,
-# which is what `devops/tests/test_shipping_smoke.py --stub-only` and the gate's
-# `bundle-stub` step forbid after the fact. This stops it before the commit
-# exists.
+#   1. the shipping bundle crate must be the project-agnostic stub, never a
+#      generation (a generation names one project and would let the shipping
+#      posture type-check against whichever was generated last);
+#   2. no staged file may be larger than SIZE_LIMIT_BYTES;
+#   3. only the example projects listed in policy.env may be committed under
+#      examples/.
 #
-# It reads the index, not the working tree, so committing other files while a
-# generation sits in the tree still works.
+# The rules themselves live in `policy.env` beside this hook, which the gate's
+# `commit-policy` step reads too, so the two cannot disagree. It reads the index,
+# not the working tree, so committing other files while a generation sits in the
+# tree still works.
 #
 # Enable it once per clone:
 #   git config --local core.hooksPath devops/git-hooks
@@ -16,14 +19,17 @@
 set -e
 stub_refused=0
 size_refused=0
+examples_refused=0
 
-# The largest file a commit may stage, in bytes: 100 KiB. Strict - no path is
-# exempt, so a change to an existing large file is refused too.
-SIZE_LIMIT_BYTES=102400
-
-# The only example projects a commit may touch. A project is a folder under
-# examples/; files directly in examples/ (the README) are unaffected.
-EXAMPLE_PROJECTS="cube cube_no_editor headless pills"
+# The policy lives in one file beside this hook, shared with the gate's
+# `commit-policy` step (`devops/tests/test_commit_policy.py`).
+hooks_directory=$(dirname "$0")
+if [ -f "$hooks_directory/policy.env" ]; then
+    . "$hooks_directory/policy.env"
+else
+    echo "commit refused: $hooks_directory/policy.env is missing." >&2
+    exit 1
+fi
 
 check_stub() {
     path="$1"
@@ -79,14 +85,13 @@ $staged
 EOF
 }
 
-examples_refused=0
 check_examples
 
 if [ "$stub_refused" -ne 0 ]; then
     echo "put the stub back first: python devops/tools/generate_shipping_bundle.py --restore-stub" >&2
 fi
 if [ "$size_refused" -ne 0 ]; then
-    echo "split the file, or raise SIZE_LIMIT_BYTES in devops/git-hooks/pre-commit" >&2
+    echo "split the file, or raise SIZE_LIMIT_BYTES in devops/git-hooks/policy.env" >&2
 fi
 if [ "$examples_refused" -ne 0 ]; then
     echo "allowed example projects: $EXAMPLE_PROJECTS" >&2
