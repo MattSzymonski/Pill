@@ -5,3 +5,13 @@
 # before the first frame (observed on the ESP32-C6), so ask for 32 KB out of
 # the module's internal DRAM.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+
+# The board's flash chip. ESP-IDF's default is 2 MB, which leaves the app
+# partition smaller than the image and makes the bootloader warn that the image
+# describes less flash than the chip has.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# The layout in `partitions.csv` beside this file. The build appends the
+# absolute path to it, because ESP-IDF resolves a custom table against its own
+# project directory rather than against the repository.
+CONFIG_PARTITION_TABLE_CUSTOM=y

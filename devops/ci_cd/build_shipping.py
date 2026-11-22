@@ -181,9 +181,17 @@ DEVICE_MCUS = {
 }
 
 # The device build's sdkconfig defaults: the settings the image needs and the
-# ESP-IDF defaults do not carry, such as the main task's stack size.
+# ESP-IDF defaults do not carry, such as the main task's stack size, the flash
+# size and the choice of a custom partition table.
 DEVICE_SDKCONFIG_DEFAULTS = (
     Path("modules") / "frontends" / "pill_standalone" / "device" / "sdkconfig.defaults"
+)
+
+# The device's partition layout. It has to travel with the defaults as an
+# absolute path (see `write_device_sdkconfig_defaults`), and it is copied into
+# the bundle so a bare board can be flashed from it.
+DEVICE_PARTITION_CSV = (
+    Path("modules") / "frontends" / "pill_standalone" / "device" / "partitions.csv"
 )
 
 # The device image's recorded size budget, in bytes: the loaded flash image
@@ -354,6 +362,54 @@ def device_target_directory(repository_root: Path) -> Path:
         return Path(override)
     drive = repository_root.drive or "C:"
     return Path(f"{drive}\\p")
+
+
+def device_sdkconfig_files(request: "BuildRequest") -> List[Path]:
+    """The `sdkconfig` files a device build's ESP-IDF project generated."""
+    if request.target_directory is None:
+        return []
+    build_root = request.target_directory / str(request.target) / request.profile_name
+    return sorted(build_root.glob("build/esp-idf-sys-*/out/sdkconfig"))
+
+
+def write_device_sdkconfig_defaults(request: "BuildRequest") -> Optional[Path]:
+    """Writes the ESP-IDF defaults a device build passes, and clears a stale sdkconfig.
+
+    The repository's defaults file holds the settings that name no path. The
+    partition table does, and ESP-IDF resolves a custom table against its own
+    project directory - which is the `esp-idf-sys` output directory, not the
+    repository - so the absolute path is appended here, at build time, into one
+    generated file.
+
+    A `sdkconfig` left by an earlier build outranks these defaults: `esp-idf-sys`
+    passes it as the last defaults file on purpose, so a menuconfig edit
+    survives. It has to go when the generated defaults change, or the previous
+    flash size and partition table would keep winning.
+    """
+    settings = request.repository_root / DEVICE_SDKCONFIG_DEFAULTS
+    partition_csv = request.repository_root / DEVICE_PARTITION_CSV
+    if not settings.is_file() or not partition_csv.is_file():
+        print(
+            f"  sdkconfig: {DEVICE_SDKCONFIG_DEFAULTS} or {DEVICE_PARTITION_CSV} "
+            "is missing; the build falls back to ESP-IDF's defaults",
+            file=sys.stderr,
+        )
+        return None
+    if request.target_directory is None:
+        return None
+    overlay = request.target_directory / "pill-sdkconfig.defaults"
+    content = settings.read_text(encoding="utf-8").rstrip("\n") + "\n"
+    # Forward slashes: Kconfig reads `\` in a sdkconfig string as an escape, so a
+    # Windows path written with backslashes arrives with its separators eaten.
+    content += f'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="{partition_csv.as_posix()}"\n'
+    previous = overlay.read_text(encoding="utf-8") if overlay.is_file() else None
+    overlay.parent.mkdir(parents=True, exist_ok=True)
+    overlay.write_text(content, encoding="utf-8")
+    if content != previous:
+        for stale in device_sdkconfig_files(request):
+            stale.unlink()
+            print(f"  sdkconfig: dropped {stale.parent}, its defaults changed")
+    return overlay
 
 
 def resolve_project_root(repository_root: Path, project_path: str) -> Path:
@@ -1318,12 +1374,12 @@ def run_cargo(request: BuildRequest) -> subprocess.CompletedProcess:
         triple_key = request.target.upper().replace("-", "_")
         environment[f"CARGO_TARGET_{triple_key}_LINKER"] = "ldproxy"
         # The image's own ESP-IDF settings; the caller's environment wins.
-        sdkconfig_defaults = request.repository_root / DEVICE_SDKCONFIG_DEFAULTS
-        if (
-            sdkconfig_defaults.is_file()
-            and "ESP_IDF_SDKCONFIG_DEFAULTS" not in os.environ
-        ):
-            environment["ESP_IDF_SDKCONFIG_DEFAULTS"] = str(sdkconfig_defaults)
+        if "ESP_IDF_SDKCONFIG_DEFAULTS" in os.environ:
+            print("  sdkconfig: the caller's ESP_IDF_SDKCONFIG_DEFAULTS is used as is")
+        else:
+            overlay = write_device_sdkconfig_defaults(request)
+            if overlay is not None:
+                environment["ESP_IDF_SDKCONFIG_DEFAULTS"] = str(overlay)
     command = ["cargo"]
     if device_target:
         command.append("+esp")
