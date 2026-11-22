@@ -1,39 +1,78 @@
 #!/bin/sh
-# Refuses a commit that breaks the repository's commit policy, and says what the
-# rule is, why it exists and how to fix it.
+# Refuses a commit that would break this repository's commit policy.
 #
-# The policy, in devops/hooks/policy.env beside this file and shared with the
-# gate's `commit-policy` step, is:
+# # Responsibilities
 #
-#   1. the shipping bundle crate must be the project-agnostic stub, never a
-#      generation (a generation names one project and would let the shipping
-#      posture type-check against whichever was generated last);
-#   2. no staged file may be larger than SIZE_LIMIT_BYTES;
-#   3. only the example projects listed there may be committed under examples/.
+# - Refuses a staged shipping bundle that is a generation; only the
+#   project-agnostic stub may be committed.
+# - Refuses a staged file larger than the size limit.
+# - Refuses files under examples/ that are not one of the allowed example
+#   projects.
 #
-# It reads the index, not the working tree, so committing other files while a
-# generation sits in the tree still works.
+# # Design
+#
+# The rules themselves live in policy.env beside this file, which the gate's
+# commit-policy step reads too, so the hook and CI cannot disagree. Every check
+# reads the index rather than the working tree: staging other work while a
+# generation sits in the tree still commits cleanly. A refusal prints the file,
+# the rule, why the rule exists and the fix, then exits non-zero, and git
+# abandons the commit.
 #
 # Enable it once per clone:
 #   git config --local core.hooksPath devops/hooks
 
 set -e
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+# The bundle crate. Each file is recognised by the marker its stub carries and a
+# generation does not, so a generated file is refused whatever it contains.
+BUNDLE_LIBRARY="build/pill_shipping_bundle/src/lib.rs"
+BUNDLE_LIBRARY_MARKER="committed stub"
+BUNDLE_MANIFEST="build/pill_shipping_bundle/Cargo.toml"
+BUNDLE_MANIFEST_MARKER="committed face of the shipping bundle"
+
+# The policy beside this hook. It defines SIZE_LIMIT_BYTES and EXAMPLE_PROJECTS.
+POLICY_FILE_NAME="policy.env"
+
+# =============================================================================
+# State
+# =============================================================================
+
+# Set by the check that refused, so the closing line knows whether to fire.
 stub_refused=0
 size_refused=0
 examples_refused=0
 
+# =============================================================================
+# Policy
+# =============================================================================
+
 hooks_directory=$(dirname "$0")
-policy_file="$hooks_directory/policy.env"
-if [ ! -f "$policy_file" ]; then
-    cat >&2 <<'MISSING'
+
+# Sources the policy the checks read.
+#
+# A missing policy file stops the commit: the alternative is running with
+# defaults nobody chose, which would quietly weaken every rule.
+load_policy() {
+    policy_file="$hooks_directory/$POLICY_FILE_NAME"
+    if [ ! -f "$policy_file" ]; then
+        cat >&2 <<'MISSING'
 commit refused: devops/hooks/policy.env is missing.
   The hook reads the size limit and the allowed example projects from that file,
   so it cannot check anything without it.
   fix: restore the file from the repository (it is tracked), then commit again.
 MISSING
-    exit 1
-fi
-. "$policy_file"
+        exit 1
+    fi
+    . "$policy_file"
+}
+
+# =============================================================================
+# Refusals
+# =============================================================================
 
 # Names the file that broke the bundle rule, what the rule protects, and the one
 # command that puts the stub back.
@@ -74,19 +113,39 @@ commit refused: $1 is in examples/$2, which is not an allowed example project.
 EOF
 }
 
+# =============================================================================
+# Checks
+# =============================================================================
+
+# Refuses a staged bundle file that is a generation.
+#
+# Takes the path and the marker its stub carries. A path absent from the index
+# is not part of this commit and is skipped.
 check_stub() {
     path="$1"
     marker="$2"
-    if git cat-file -e ":$path" 2>/dev/null; then
-        if ! git cat-file -p ":$path" | grep -q "$marker"; then
-            refuse_bundle "$path"
-            stub_refused=1
-        fi
+
+    # Step 1: read the staged blob, which is what the commit would carry.
+    if ! git cat-file -e ":$path" 2>/dev/null; then
+        return 0
+    fi
+
+    # Step 2: the marker is in the stub and gone from a generation.
+    if ! git cat-file -p ":$path" | grep -q "$marker"; then
+        refuse_bundle "$path"
+        stub_refused=1
     fi
 }
 
+# Refuses a staged file whose blob is larger than the policy allows.
+#
+# Added and modified files only: a deletion stages no blob, and removing a large
+# file must always stay possible.
 check_size() {
+    # Step 1: list what the commit adds or changes.
     staged=$(git diff --cached --name-only --diff-filter=AM)
+
+    # Step 2: measure each staged blob, by the size the commit would store.
     while IFS= read -r path; do
         [ -n "$path" ] || continue
         size=$(git cat-file -s ":$path" 2>/dev/null || echo 0)
@@ -99,8 +158,15 @@ $staged
 EOF
 }
 
+# Refuses a staged path inside an examples/ folder that is not on the allowlist.
+#
+# A file directly in examples/ (the README) is not an example project and is
+# left alone, as is everything below an allowed folder.
 check_examples() {
+    # Step 1: list what the commit adds or changes.
     staged=$(git diff --cached --name-only --diff-filter=AM)
+
+    # Step 2: compare the folder of each path against the allowlist.
     while IFS= read -r path; do
         [ -n "$path" ] || continue
         case "$path" in
@@ -124,12 +190,17 @@ $staged
 EOF
 }
 
-check_stub build/pill_shipping_bundle/src/lib.rs "committed stub"
-check_stub build/pill_shipping_bundle/Cargo.toml "committed face of the shipping bundle"
+# =============================================================================
+# Run
+# =============================================================================
+
+load_policy
+check_stub "$BUNDLE_LIBRARY" "$BUNDLE_LIBRARY_MARKER"
+check_stub "$BUNDLE_MANIFEST" "$BUNDLE_MANIFEST_MARKER"
 check_size
 check_examples
 
 if [ "$stub_refused" -ne 0 ] || [ "$size_refused" -ne 0 ] || [ "$examples_refused" -ne 0 ]; then
-    printf '\nNothing was committed. Every rule comes from %s.\n' "devops/hooks/policy.env" >&2
+    printf '\nNothing was committed. Every rule comes from devops/hooks/policy.env.\n' >&2
     exit 1
 fi
