@@ -21,6 +21,10 @@ size_refused=0
 # exempt, so a change to an existing large file is refused too.
 SIZE_LIMIT_BYTES=102400
 
+# The only example projects a commit may touch. A project is a folder under
+# examples/; files directly in examples/ (the README) are unaffected.
+EXAMPLE_PROJECTS="cube cube_no_editor headless pills"
+
 check_stub() {
     path="$1"
     marker="$2"
@@ -50,12 +54,43 @@ check_stub build/pill_shipping_bundle/src/lib.rs "committed stub"
 check_stub build/pill_shipping_bundle/Cargo.toml "committed face of the shipping bundle"
 check_size
 
+check_examples() {
+    staged=$(git diff --cached --name-only --diff-filter=AM)
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        case "$path" in
+            examples/*/*)
+                rest=${path#examples/}
+                project=${rest%%/*}
+                allowed=0
+                for name in $EXAMPLE_PROJECTS; do
+                    if [ "$project" = "$name" ]; then
+                        allowed=1
+                    fi
+                done
+                if [ "$allowed" -eq 0 ]; then
+                    echo "commit refused: $path is in examples/$project, which is not one of the allowed example projects." >&2
+                    examples_refused=1
+                fi
+                ;;
+        esac
+    done <<EOF
+$staged
+EOF
+}
+
+examples_refused=0
+check_examples
+
 if [ "$stub_refused" -ne 0 ]; then
     echo "put the stub back first: python devops/tools/generate_shipping_bundle.py --restore-stub" >&2
 fi
 if [ "$size_refused" -ne 0 ]; then
     echo "split the file, or raise SIZE_LIMIT_BYTES in devops/git-hooks/pre-commit" >&2
 fi
-if [ "$stub_refused" -ne 0 ] || [ "$size_refused" -ne 0 ]; then
+if [ "$examples_refused" -ne 0 ]; then
+    echo "allowed example projects: $EXAMPLE_PROJECTS" >&2
+fi
+if [ "$stub_refused" -ne 0 ] || [ "$size_refused" -ne 0 ] || [ "$examples_refused" -ne 0 ]; then
     exit 1
 fi
