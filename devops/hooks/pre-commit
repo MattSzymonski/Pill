@@ -2,6 +2,19 @@
 # Refuses a commit that breaks the repository's commit policy, and says what the
 # rule is, why it exists and how to fix it.
 #
+# It serves both hook names git calls around a commit, because the checks belong
+# together and one file is easier to keep honest:
+#
+#   pre-commit (no arguments)          the tree: the shipping bundle stub, the
+#                                      file-size limit, the example projects;
+#   commit-msg --commit-message <file>  the first line of the message:
+#                                      Conventional Commits, as the contributing
+#                                      guide defines it.
+#
+# Git calls those two at different moments - the message does not exist yet when
+# pre-commit runs - so `devops/hooks/commit-msg` is a three-line forwarder to
+# this file rather than a copy of the checks.
+#
 # The policy, in devops/hooks/policy.env beside this file and shared with the
 # gate's `commit-policy` step, is:
 #
@@ -9,7 +22,9 @@
 #      generation (a generation names one project and would let the shipping
 #      posture type-check against whichever was generated last);
 #   2. no staged file may be larger than SIZE_LIMIT_BYTES;
-#   3. only the example projects listed there may be committed under examples/.
+#   3. only the example projects listed there may be committed under examples/;
+#   4. the first line of the message follows Conventional Commits with the
+#      guide's types and scopes.
 #
 # It reads the index, not the working tree, so committing other files while a
 # generation sits in the tree still works.
@@ -123,6 +138,102 @@ check_examples() {
 $staged
 EOF
 }
+
+# --- The commit message, when git calls this file as `commit-msg` -------------
+
+refuse_message() {
+    cat >&2 <<EOF
+commit message refused: $1
+  The first line follows Conventional Commits, as the contributing guide says:
+  <type>(<scope>): <description>, imperative, lowercase, no period, ten words at
+  most; leave the scope out when no feature owns the change, and put ! before
+  the colon for a breaking change.
+  types:  $COMMIT_TYPES
+  scopes: $COMMIT_SCOPES, or extension:<name>
+  This commit: $2
+EOF
+    exit 1
+}
+
+check_commit_message() {
+    message_file="$1"
+    # The first line that is not a comment and not blank.
+    first_line=$(grep -v '^#' "$message_file" | sed '/^[[:space:]]*$/d' | head -n 1)
+
+    case "$first_line" in
+        '') return 0 ;;
+        # Git's own messages are not ours to police: merges, reverts it
+        # generated, and the fixup!/squash! markers autosquash needs.
+        Merge\ * | Revert\ \"* | fixup!\ * | squash!\ *) return 0 ;;
+    esac
+
+    if ! printf '%s\n' "$first_line" | grep -Eq '^[a-z]+(\([a-z_:]+\))?!?: .+$'; then
+        refuse_message "the first line does not read <type>(<scope>): <description>" "$first_line"
+    fi
+
+    commit_type=$(printf '%s\n' "$first_line" | sed -n 's/^\([a-z][a-z]*\).*/\1/p')
+    commit_scope=$(printf '%s\n' "$first_line" | sed -n 's/^[a-z][a-z]*(\([^)]*\)).*/\1/p')
+    # The description starts after the prefix, and an extension scope contains a
+    # colon of its own (`fix(extension:audio): ...`), so cut at the scope's
+    # closing parenthesis when there is one and at the first colon otherwise.
+    case "$first_line" in
+        *'): '*) description=${first_line#*'): '} ;;
+        *) description=${first_line#*': '} ;;
+    esac
+
+    type_known=0
+    for known_type in $COMMIT_TYPES; do
+        if [ "$commit_type" = "$known_type" ]; then
+            type_known=1
+        fi
+    done
+    if [ "$type_known" -eq 0 ]; then
+        refuse_message "the type '$commit_type' is not one of the guide's types" "$first_line"
+    fi
+
+    if [ -n "$commit_scope" ]; then
+        case "$commit_scope" in
+            extension:*) ;;
+            *)
+                scope_known=0
+                for known_scope in $COMMIT_SCOPES; do
+                    if [ "$commit_scope" = "$known_scope" ]; then
+                        scope_known=1
+                    fi
+                done
+                if [ "$scope_known" -eq 0 ]; then
+                    refuse_message "the scope '$commit_scope' is not one of the guide's scopes" "$first_line"
+                fi
+                ;;
+        esac
+    fi
+
+    if [ -z "$description" ]; then
+        refuse_message "there is no description after the colon" "$first_line"
+    fi
+
+    case "$description" in
+        *.) refuse_message "the description ends with a period" "$first_line" ;;
+    esac
+
+    first_character=$(printf '%s' "$description" | cut -c 1)
+    case "$first_character" in
+        [a-z0-9]) ;;
+        *) refuse_message "the description starts with '$first_character'; it is written in lowercase, and imperatively" "$first_line" ;;
+    esac
+
+    word_count=$(printf '%s' "$description" | wc -w | tr -d ' ')
+    if [ "$word_count" -gt 10 ]; then
+        refuse_message "the description is $word_count words long; the guide allows ten, because a longer commit is probably two commits" "$first_line"
+    fi
+}
+
+if [ "$1" = "--commit-message" ]; then
+    check_commit_message "$2"
+    exit 0
+fi
+
+# --- The tree, when git calls this file as `pre-commit` ----------------------
 
 check_stub build/pill_shipping_bundle/src/lib.rs "committed stub"
 check_stub build/pill_shipping_bundle/Cargo.toml "committed face of the shipping bundle"
