@@ -14,7 +14,12 @@
 #   git config --local core.hooksPath devops/git-hooks
 
 set -e
-refused=0
+stub_refused=0
+size_refused=0
+
+# The largest file a commit may stage, in bytes: 100 KiB. Strict - no path is
+# exempt, so a change to an existing large file is refused too.
+SIZE_LIMIT_BYTES=102400
 
 check_stub() {
     path="$1"
@@ -22,15 +27,35 @@ check_stub() {
     if git cat-file -e ":$path" 2>/dev/null; then
         if ! git cat-file -p ":$path" | grep -q "$marker"; then
             echo "commit refused: $path is a generated bundle, not the stub." >&2
-            refused=1
+            stub_refused=1
         fi
     fi
 }
 
+check_size() {
+    staged=$(git diff --cached --name-only --diff-filter=AM)
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        size=$(git cat-file -s ":$path" 2>/dev/null || echo 0)
+        if [ "$size" -gt "$SIZE_LIMIT_BYTES" ]; then
+            echo "commit refused: $path is $size bytes, over the $SIZE_LIMIT_BYTES-byte limit." >&2
+            size_refused=1
+        fi
+    done <<EOF
+$staged
+EOF
+}
+
 check_stub build/pill_shipping_bundle/src/lib.rs "committed stub"
 check_stub build/pill_shipping_bundle/Cargo.toml "committed face of the shipping bundle"
+check_size
 
-if [ "$refused" -ne 0 ]; then
+if [ "$stub_refused" -ne 0 ]; then
     echo "put the stub back first: python devops/tools/generate_shipping_bundle.py --restore-stub" >&2
+fi
+if [ "$size_refused" -ne 0 ]; then
+    echo "split the file, or raise SIZE_LIMIT_BYTES in devops/git-hooks/pre-commit" >&2
+fi
+if [ "$stub_refused" -ne 0 ] || [ "$size_refused" -ne 0 ]; then
     exit 1
 fi
