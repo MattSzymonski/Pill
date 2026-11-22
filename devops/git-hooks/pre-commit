@@ -1,0 +1,36 @@
+#!/bin/sh
+# Refuses a commit that would carry a generated shipping bundle.
+#
+# The bundle crate must stay the project-agnostic stub: a generated one makes
+# the shipping posture type-check against whichever project was generated last,
+# which is what `devops/tests/test_shipping_smoke.py --stub-only` and the gate's
+# `bundle-stub` step forbid after the fact. This stops it before the commit
+# exists.
+#
+# It reads the index, not the working tree, so committing other files while a
+# generation sits in the tree still works.
+#
+# Enable it once per clone:
+#   git config --local core.hooksPath devops/git-hooks
+
+set -e
+refused=0
+
+check_stub() {
+    path="$1"
+    marker="$2"
+    if git cat-file -e ":$path" 2>/dev/null; then
+        if ! git cat-file -p ":$path" | grep -q "$marker"; then
+            echo "commit refused: $path is a generated bundle, not the stub." >&2
+            refused=1
+        fi
+    fi
+}
+
+check_stub build/pill_shipping_bundle/src/lib.rs "committed stub"
+check_stub build/pill_shipping_bundle/Cargo.toml "committed face of the shipping bundle"
+
+if [ "$refused" -ne 0 ]; then
+    echo "put the stub back first: python devops/tools/generate_shipping_bundle.py --restore-stub" >&2
+    exit 1
+fi
