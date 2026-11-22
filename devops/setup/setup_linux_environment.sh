@@ -56,6 +56,10 @@
 #      `trait_type_map` git dependency - is already cached, so the script runs
 #      `cargo fetch` in modules/ once while it still has the network.
 #
+#   7. Git hooks. `core.hooksPath` is per-clone configuration and cannot be
+#      committed, so a fresh clone runs no hook until git is pointed at
+#      `devops/hooks` - which is where the pre-commit policy lives.
+#
 #   Before any step runs, the script prints this plan with everything it may
 #   install and asks once whether to include the VS Code debugging setup, so
 #   the rest of the run needs no input. Without a terminal to ask on, the
@@ -430,6 +434,24 @@ fetch_cargo_dependencies() {
     info "cargo dependency cache populated"
 }
 
+# Point git at the tracked hooks. `core.hooksPath` is per-clone configuration
+# and cannot be committed, so a fresh checkout runs no hook until this runs;
+# devops/hooks/pre-commit is where the commit policy lives.
+install_git_hooks() {
+    local configured
+    if configured=$(git -C "$REPO_ROOT" config --local --get core.hooksPath 2> /dev/null); then
+        if [[ "$configured" == "devops/hooks" ]]; then
+            info "git hooks already enabled (core.hooksPath=$configured)"
+        else
+            info "core.hooksPath is '$configured', not 'devops/hooks'; leaving it as it is"
+        fi
+        return
+    fi
+    git -C "$REPO_ROOT" config --local core.hooksPath devops/hooks \
+        || fail "could not set core.hooksPath to devops/hooks"
+    info "git hooks enabled (core.hooksPath=devops/hooks)"
+}
+
 # --- main -------------------------------------------------------------------
 
 FETCH=1
@@ -463,6 +485,8 @@ This script prepares this machine to build and run the engine. It will:
                         Even Better TOML and CodeLLDB.
   6. Cargo cache        Download every crate dependency once (cargo fetch), so offline
                         builds during hot reload never wait on the network.
+  7. Git hooks          Point core.hooksPath at devops/hooks, so the pre-commit
+                        policy (bundle stub, file size, example projects) applies here.
 
 Anything already installed is detected and skipped.
 
@@ -521,6 +545,7 @@ main() {
     if [[ "$FETCH" == "1" ]]; then
         fetch_cargo_dependencies
     fi
+    install_git_hooks
 
     printf '\n%sSetup complete.%s Run the project with:\n' "$GREEN" "$NC"
     printf '  export DOTNET_ROOT="%s"\n' "$DOTNET_ROOT"

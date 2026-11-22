@@ -24,6 +24,9 @@
 #      extensions the launch profiles depend on.
 #   6. The offline cargo registry cache, so `cargo build --offline` never waits
 #      on the registry during a reload.
+#   7. The repository's git hooks. `core.hooksPath` is per-clone configuration
+#      and cannot be committed, so a fresh clone runs no hook until git is
+#      pointed at `devops/hooks` - which is where the pre-commit policy lives.
 #
 #   Before any step runs, the script prints this plan with everything it may
 #   install and asks once whether to include the VS Code debugging setup, so
@@ -51,7 +54,7 @@ $ProgressPreference = "SilentlyContinue"
 # Shared state for the [n/6] step marker printed by Write-Step and for the
 # failure report in the top-level catch block.
 $script:StepNumber = 0
-$script:TotalSteps = 6
+$script:TotalSteps = 7
 $script:CurrentStepTitle = 'startup'
 $script:CodeExtensionCache = $null
 
@@ -374,6 +377,8 @@ function Show-SetupOverview {
     Write-Host '                        Hex Editor, Even Better TOML and CodeLLDB.'
     Write-Host '  6. Cargo cache        Download every crate dependency once (cargo fetch), so offline'
     Write-Host '                        builds during hot reload never wait on the network.'
+    Write-Host '  7. Git hooks          Point core.hooksPath at devops/hooks, so the pre-commit'
+    Write-Host '                        policy (bundle stub, file size, example projects) applies here.'
     Write-Host ''
     Write-Host 'Anything already installed is detected and skipped.'
     Write-Host ''
@@ -579,6 +584,35 @@ try {
             throw "cargo fetch failed with exit code $LASTEXITCODE."
         }
         Write-Success 'Cargo dependency cache populated.'
+    }
+    finally {
+        Pop-Location
+    }
+
+    # --- 7. Git hooks -------------------------------------------------------
+    # `core.hooksPath` is per-clone configuration, so a fresh clone runs no
+    # hook until git is pointed at the tracked directory; the pre-commit
+    # policy (bundle stub, file size, example projects) lives there.
+    Write-Step 'Git hooks'
+    Push-Location -LiteralPath $repoRoot
+    try {
+        $configuredHooksPath = (& git config --local --get core.hooksPath 2>$null)
+        if ($configuredHooksPath) {
+            $configuredHooksPath = "$configuredHooksPath".Trim()
+        }
+        if ($configuredHooksPath -eq 'devops/hooks') {
+            Write-Success 'Git hooks are already enabled.'
+        }
+        elseif ($configuredHooksPath) {
+            Write-Caution "core.hooksPath is '$configuredHooksPath', not 'devops/hooks'; leaving it as it is."
+        }
+        else {
+            & git config --local core.hooksPath devops/hooks
+            if ($LASTEXITCODE -ne 0) {
+                throw "git config failed with exit code $LASTEXITCODE."
+            }
+            Write-Success 'Git hooks enabled (core.hooksPath=devops/hooks).'
+        }
     }
     finally {
         Pop-Location
