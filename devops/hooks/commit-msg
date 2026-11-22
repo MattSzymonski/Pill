@@ -1,0 +1,114 @@
+#!/bin/sh
+# Refuses a commit message that breaks the Conventional Commits rules in
+# Pill-Docs/guide/other/contributing/repository-standards.md.
+#
+# Git passes the path to the message file as $1. Only the first line is
+# checked - its shape, type, scope and description - because that is what the
+# standards pin down; the body and footers are left to the author and reviewer.
+#
+# The types and scopes live in devops/hooks/policy.env beside this file, so the
+# policy has one home. Enable it with the rest of the hooks:
+#   git config --local core.hooksPath devops/hooks
+
+set -e
+message_file="$1"
+hooks_directory=$(dirname "$0")
+policy_file="$hooks_directory/policy.env"
+
+if [ ! -f "$policy_file" ]; then
+    cat >&2 <<'MISSING'
+commit message refused: devops/hooks/policy.env is missing.
+  The hook reads the allowed types and scopes from that file.
+  fix: restore the file from the repository (it is tracked), then commit again.
+MISSING
+    exit 1
+fi
+. "$policy_file"
+
+refuse_with() {
+    cat >&2 <<EOF
+commit message refused: $1
+  The first line follows Conventional Commits, as the contributing guide says:
+  <type>(<scope>): <description>, imperative, lowercase, no period, ten words at
+  most; leave the scope out when no feature owns the change, and put ! before
+  the colon for a breaking change.
+  types:  $COMMIT_TYPES
+  scopes: $COMMIT_SCOPES, or extension:<name>
+  This commit: $2
+EOF
+    exit 1
+}
+
+# The first line that is not a comment and not blank.
+first_line=$(grep -v '^#' "$message_file" | sed '/^[[:space:]]*$/d' | head -n 1)
+
+case "$first_line" in
+    '') exit 0 ;;
+    # Git's own messages are not ours to police: merges, reverts it generated,
+    # and the fixup!/squash! markers autosquash needs.
+    Merge\ * | Revert\ \"* | fixup!\ * | squash!\ *) exit 0 ;;
+esac
+
+# The shape: a lowercase type, an optional parenthesised scope, an optional !
+# for a breaking change, a colon, a space, and a description.
+if ! printf '%s\n' "$first_line" | grep -Eq '^[a-z]+(\([a-z_:]+\))?!?: .+$'; then
+    refuse_with "the first line does not read <type>(<scope>): <description>" "$first_line"
+fi
+
+commit_type=$(printf '%s\n' "$first_line" | sed -n 's/^\([a-z][a-z]*\).*/\1/p')
+commit_scope=$(printf '%s\n' "$first_line" | sed -n 's/^[a-z][a-z]*(\([^)]*\)).*/\1/p')
+# The description starts after the prefix, and an extension scope contains a
+# colon of its own (`fix(extension:audio): ...`), so cut at the scope's closing
+# parenthesis when there is one and at the first colon otherwise.
+case "$first_line" in
+    *'): '*) description=${first_line#*'): '} ;;
+    *) description=${first_line#*': '} ;;
+esac
+
+type_known=0
+for known_type in $COMMIT_TYPES; do
+    if [ "$commit_type" = "$known_type" ]; then
+        type_known=1
+    fi
+done
+if [ "$type_known" -eq 0 ]; then
+    refuse_with "the type '$commit_type' is not one of the guide's types" "$first_line"
+fi
+
+if [ -n "$commit_scope" ]; then
+    case "$commit_scope" in
+        extension:*) ;;
+        *)
+            scope_known=0
+            for known_scope in $COMMIT_SCOPES; do
+                if [ "$commit_scope" = "$known_scope" ]; then
+                    scope_known=1
+                fi
+            done
+            if [ "$scope_known" -eq 0 ]; then
+                refuse_with "the scope '$commit_scope' is not one of the guide's scopes" "$first_line"
+            fi
+            ;;
+    esac
+fi
+
+if [ -z "$description" ]; then
+    refuse_with "there is no description after the colon" "$first_line"
+fi
+
+case "$description" in
+    *.) refuse_with "the description ends with a period" "$first_line" ;;
+esac
+
+first_character=$(printf '%s' "$description" | cut -c 1)
+case "$first_character" in
+    [a-z0-9]) ;;
+    *) refuse_with "the description starts with '$first_character'; it is written in lowercase, and imperatively" "$first_line" ;;
+esac
+
+word_count=$(printf '%s' "$description" | wc -w | tr -d ' ')
+if [ "$word_count" -gt 10 ]; then
+    refuse_with "the description is $word_count words long; the guide allows ten, because a longer commit is probably two commits" "$first_line"
+fi
+
+exit 0
