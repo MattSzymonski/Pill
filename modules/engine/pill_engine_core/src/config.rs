@@ -19,9 +19,10 @@
 //! stack under `telemetry_target::SYSTEM`, so it can be filtered, redirected
 //! to the file lane or silenced like any other engine output. It is one
 //! multi-line event (`log_block`), which the terminal formatter prints as a
-//! block below its time, level and target. The hardware report lives in
-//! `pill_player` (its `system_specs` module), which keeps `sysinfo` out of the
-//! shared engine dylib.
+//! block below its time, level and target. A host calls it from its start-up
+//! report, after it has warmed the pool; the hardware report itself lives in
+//! `pill_player` (its `startup_report` module), which keeps `sysinfo` out of
+//! the shared engine dylib.
 
 // External crates
 use pill_core::info;

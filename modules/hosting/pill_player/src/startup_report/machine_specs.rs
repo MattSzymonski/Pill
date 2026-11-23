@@ -1,9 +1,8 @@
-//! The start-up report of the machine the engine runs on.
+//! The start-up report of the machine the game runs on.
 //!
 //! # Responsibilities
 //!
-//! - Reports CPU, memory, storage and OS through the telemetry stack when a
-//!   [`crate::Runtime`] is created.
+//! - Report CPU, memory, storage and OS through the telemetry stack.
 //!
 //! # Design
 //!
@@ -13,6 +12,8 @@
 //! DLLs (rustc creates the import library for each DLL when it links). A
 //! shared `pill_engine_core.dll` that carried those imports would make every
 //! hot patch generate an import library for each DLL.
+//!
+//! Only compiled off the embedded target, which has no desktop system to read.
 
 // External crates
 use pill_core::info;
@@ -42,9 +43,9 @@ const BYTES_PER_GIBIBYTE: f64 = 1024.0 * 1024.0 * 1024.0;
 /// it can be filtered or redirected like any other engine output, and its
 /// box-drawing layout stays in one block.
 ///
-/// [`Runtime::new`](crate::Runtime::new) calls it before it creates the
-/// engine.
-pub(crate) fn report_machine_specs() {
+/// [`report_host_startup`](super::report_host_startup) calls it before the
+/// engine is built.
+pub(super) fn report_machine_specs() {
     // Step 1: Read memory, swap and CPU identity into a fresh snapshot.
     //
     // Refresh only what the report reads. `System::new_all()` would also

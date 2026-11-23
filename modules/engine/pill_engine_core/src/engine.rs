@@ -31,7 +31,6 @@ use std::time::Duration;
 
 // External crates
 use pill_core::platform::Instant;
-use pill_core::rayon;
 use pill_core::rayon::prelude::*;
 use pill_core::telemetry::telemetry_target;
 use pill_core::warn;
@@ -620,17 +619,6 @@ impl Engine {
             batch_packing_pct,
             tracy_client::PlotConfiguration::default()
         );
-
-        // Warm up the Rayon thread pool so the first parallel batch
-        // does not pay thread-spawning costs (can be 1-10ms on some OS).
-        // The device configures its single worker before the engine is built,
-        // so a `broadcast` here would only spawn the default pool first.
-        #[cfg(not(target_os = "espidf"))]
-        rayon::broadcast(|_ctx| {});
-
-        // Print the active parallel-iteration knobs.
-        #[cfg(not(target_os = "espidf"))]
-        crate::config::print_parallel_config();
 
         // Resources the engine owns. They exist before any project or module
         // runs, so nothing has to check for them. The engine advances or owns
@@ -1840,7 +1828,7 @@ impl Engine {
                 crate::profiling::emit_parallel_utilization_plots(
                     &durations,
                     frame_start.elapsed().as_nanos() as u64,
-                    rayon::current_num_threads(),
+                    pill_core::rayon::current_num_threads(),
                     &parallel_batches,
                 );
             }

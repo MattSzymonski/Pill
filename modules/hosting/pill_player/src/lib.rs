@@ -45,12 +45,12 @@ mod render_window;
 mod rendering;
 /// Engine ownership and the frame every build runs.
 mod runtime;
+/// What a host reports and warms before the first frame: the machine report,
+/// the pool warm-up and the parallel options. The only module in this crate
+/// that differs per target.
+mod startup_report;
 /// Statically linked project and module registration.
 mod static_project;
-/// The start-up report of the machine the engine runs on. Desktop only: it
-/// reads the OS through `sysinfo`, and a device has no such machine to report.
-#[cfg(not(target_os = "espidf"))]
-mod system_specs;
 /// Application telemetry bootstrap for every frontend.
 mod telemetry;
 
