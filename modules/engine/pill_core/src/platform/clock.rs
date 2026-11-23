@@ -5,10 +5,15 @@
 //! - Define [`Instant`], the engine's monotonic timestamp, with the subset of
 //!   the `std::time::Instant` API the engine uses.
 //! - Provide [`unix_time`], the wall-clock time since the Unix epoch.
+//! - Provide [`wall_clock`], the wall-clock time carrying the offset a log
+//!   line shows.
 //!
-//! On native both come from `std::time`. The `std` versions panic on
-//! `wasm32-unknown-unknown`, so there both come from `web-time`, which reads
+//! On native the values come from `std::time`. The `std` versions panic on
+//! `wasm32-unknown-unknown`, so there they come from `web-time`, which reads
 //! `performance.now()` and `Date.now()`.
+//!
+//! The embedded target has no time-zone database, so [`wall_clock`] there is
+//! UTC; on every other target it is the machine's local time.
 //!
 //! [`Instant`] is a newtype, not a re-export. Clippy's `disallowed-types` lint
 //! matches the type behind a name, so a re-export would still be
@@ -128,6 +133,19 @@ pub fn unix_time() -> Duration {
     #[cfg(target_arch = "wasm32")]
     let elapsed_since_epoch = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH);
     elapsed_since_epoch.unwrap_or_default()
+}
+
+/// The wall clock, as an instant that carries its own offset.
+///
+/// Use it for a timestamp a person reads, such as the start of a log line. The
+/// offset travels with the value, so a caller formats it the same way on every
+/// target.
+pub fn wall_clock() -> chrono::DateTime<chrono::FixedOffset> {
+    #[cfg(not(target_os = "espidf"))]
+    let now = chrono::Local::now().fixed_offset();
+    #[cfg(target_os = "espidf")]
+    let now = chrono::Utc::now().fixed_offset();
+    now
 }
 
 #[cfg(test)]

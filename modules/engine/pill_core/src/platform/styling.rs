@@ -6,13 +6,33 @@
 //!   bold through the `colored` crate on native targets.
 //! - Provide the same methods on `wasm32` as plain text, with a name still put
 //!   in quotation marks.
+//! - Report whether the terminal layer may emit ANSI escapes
+//!   ([`TERMINAL_ANSI`]).
 //!
 //! # Design
 //!
 //! Only one of the two implementations is compiled, so they sit here beside
 //! the other modules that differ per target, not next to the trait. This layer
-//! holds the crate's only `cfg(target_arch)` gates, so a reader looking for
-//! per-target behaviour finds all of it here.
+//! holds the crate's only `cfg(target_arch)` and `cfg(target_os)` gates, so a
+//! reader looking for per-target behaviour finds all of it here.
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/// Whether the terminal layer styles its output with ANSI escapes.
+///
+/// Text redirected to a file usually comes back plain anyway: `colored`
+/// decides per stream whether to write the escapes.
+#[cfg(not(target_os = "espidf"))]
+pub const TERMINAL_ANSI: bool = true;
+
+/// Whether the terminal layer styles its output with ANSI escapes.
+///
+/// False here: the embedded target writes to a UART, which prints the escape
+/// codes themselves instead of interpreting them.
+#[cfg(target_os = "espidf")]
+pub const TERMINAL_ANSI: bool = false;
 
 // =============================================================================
 // PillStyle for &str (native, colored)
