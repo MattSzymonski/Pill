@@ -53,11 +53,11 @@
 #   build/01-09-2026_16-57).
 #
 #   A non-host `--target` (for example `riscv32imac-esp-espidf`) turns the same
-#   command into a device build: the profile defaults to `release-embedded`
+#   command into an embedded build: the profile defaults to `release-embedded`
 #   (`panic = "abort"`), std is built from source with the espup `esp`
 #   toolchain, the linked ELF is the artifact, and the host's DLL sidecars and
 #   PE size report do not apply. Cargo's target directory moves to a short
-#   top-level path (`PILL_DEVICE_TARGET_DIR`, `<drive>:\p` by default) because
+#   top-level path (`PILL_EMBEDDED_TARGET_DIR`, `<drive>:\p` by default) because
 #   `esp-idf-sys` refuses an output directory longer than 88 characters on
 #   Windows; the artifacts still land under the project.
 #
@@ -89,13 +89,13 @@
 #                              top-function attribution via cargo-bloat when
 #                              it is installed (cargo install cargo-bloat).
 #          --target <triple>   Build for another target. A non-host triple is a
-#                              device build: cargo runs through the `esp`
+#                              embedded build: cargo runs through the `esp`
 #                              toolchain with `-Zbuild-std=std,panic_abort`,
 #                              the profile defaults to `release-embedded`, the
 #                              linked ELF is copied instead of the host binary
 #                              and its DLL sidecars, and a C# project or
 #                              `--csharp-aot` is refused (no CLR on the
-#                              device).
+#                              embedded target).
 #          --csharp-aot        For a managed C# project, ship the NativeAOT
 #                              posture: `dotnet publish -p:PublishAot=true`
 #                              produces one self-contained native library (no
@@ -164,54 +164,54 @@ SHIPPING_FEATURE = "shipping"
 # `panic = "abort"`, which the ESP-IDF runtime needs (it ships no unwinder).
 EMBEDDED_PROFILE = "release-embedded"
 
-# Where a device build puts cargo's target directory, when nothing else is
+# Where an embedded build puts cargo's target directory, when nothing else is
 # asked for. `esp-idf-sys` refuses an output directory longer than 88
 # characters on Windows and its own tail is 79 of them, so the project's
-# `build/build_meta/...` tree cannot host it: the device build needs a
+# `build/build_meta/...` tree cannot host it: the embedded build needs a
 # top-level directory. Override with this environment variable.
-DEVICE_TARGET_DIR_ENV = "PILL_DEVICE_TARGET_DIR"
+EMBEDDED_TARGET_DIR_ENV = "PILL_EMBEDDED_TARGET_DIR"
 
-# The chip each device triple builds for. `riscv32imac-esp-espidf` fits the
+# The chip each embedded triple builds for. `riscv32imac-esp-espidf` fits the
 # ESP32-H2, -C5 and -C6, so `esp-idf-sys` refuses to guess and needs `MCU`
 # named; the C6 is the board this project targets. A triple missing here is
 # left to the caller's environment.
-DEVICE_MCUS = {
+CHIP_BY_TARGET = {
     "riscv32imac-esp-espidf": "esp32c6",
     "xtensa-esp32s3-espidf": "esp32s3",
 }
 
-# The device build's sdkconfig defaults: the settings the image needs and the
+# The embedded build's sdkconfig defaults: the settings the image needs and the
 # ESP-IDF defaults do not carry, such as the main task's stack size, the flash
 # size and the choice of a custom partition table.
-DEVICE_SDKCONFIG_DEFAULTS = (
-    Path("modules") / "frontends" / "pill_standalone" / "device" / "sdkconfig.defaults"
+EMBEDDED_SDKCONFIG_DEFAULTS = (
+    Path("modules") / "frontends" / "pill_standalone" / "embedded" / "sdkconfig.defaults"
 )
 
-# The device's partition layout. It has to travel with the defaults as an
-# absolute path (see `write_device_sdkconfig_defaults`), and it is copied into
+# The embedded target's partition layout. It has to travel with the defaults as an
+# absolute path (see `write_embedded_sdkconfig_defaults`), and it is copied into
 # the bundle so a bare board can be flashed from it.
-DEVICE_PARTITION_CSV = (
-    Path("modules") / "frontends" / "pill_standalone" / "device" / "partitions.csv"
+EMBEDDED_PARTITION_CSV = (
+    Path("modules") / "frontends" / "pill_standalone" / "embedded" / "partitions.csv"
 )
 
-# The flash layout ESP-IDF generates beside a device image. `esp-idf-sys` leaves
-# both at the top of the device target directory; a bundle that leaves them out
+# The flash layout ESP-IDF generates beside an embedded image. `esp-idf-sys` leaves
+# both at the top of the embedded target directory; a bundle that leaves them out
 # cannot be flashed onto a bare board, because the flashing tool falls back to a
 # bootloader and a table of its own.
-DEVICE_FLASH_BINARIES = ("bootloader.bin", "partition-table.bin")
+EMBEDDED_FLASH_BINARIES = ("bootloader.bin", "partition-table.bin")
 
-# The device image's recorded size budget, in bytes: the loaded flash image
+# The embedded image's recorded size budget, in bytes: the loaded flash image
 # (the `.flash.*` sections) and the internal RAM it occupies (`.iram0.*` plus
 # `.dram0.*`). A build over either fails. The flash budget is normally derived
 # from the partition table the build declares (see `factory_partition`); the
 # value here is what the RAM side always uses and the flash fallback when that
 # table cannot be read.
-DEVICE_SIZE_BUDGET = {"flash_bytes": 1_800_000, "ram_bytes": 100_000}
+EMBEDDED_SIZE_BUDGET = {"flash_bytes": 1_800_000, "ram_bytes": 100_000}
 
 # How much of the factory app partition the flash budget allows the image to
 # use. The rest is slack the partition needs at flash time (segment padding,
-# the image header) and room to grow between devices.
-DEVICE_FLASH_BUDGET_PERCENT = 90
+# the image header) and room to grow on the board.
+EMBEDDED_FLASH_BUDGET_PERCENT = 90
 
 # A partition-table entry is magic (2 bytes), type, subtype, offset, size, label
 # (16 bytes) and flags; the table ends at the first entry without the magic.
@@ -363,37 +363,37 @@ def host_target_triple() -> Optional[str]:
     return rustc_verbose_info().get("host")
 
 
-def is_device_target(target: Optional[str]) -> bool:
+def is_embedded_target(target: Optional[str]) -> bool:
     """Whether `target` names a cross target rather than the host build."""
     return bool(target) and target != host_target_triple()
 
 
-def device_target_directory(repository_root: Path) -> Path:
-    """The short target directory a device build must use on Windows.
+def embedded_target_directory(repository_root: Path) -> Path:
+    """The short target directory an embedded build must use on Windows.
 
     `esp-idf-sys` refuses an output directory longer than 88 characters, and
     its own `\\riscv32imac-esp-espidf\\release-embedded\\build\\esp-idf-sys-...\\out`
     tail is 79 of them, so the project's `build/build_meta/...` tree cannot
     host it. The default is a one-letter directory on the repository's drive;
-    set `PILL_DEVICE_TARGET_DIR` to choose another short path.
+    set `PILL_EMBEDDED_TARGET_DIR` to choose another short path.
     """
-    override = os.environ.get(DEVICE_TARGET_DIR_ENV)
+    override = os.environ.get(EMBEDDED_TARGET_DIR_ENV)
     if override:
         return Path(override)
     drive = repository_root.drive or "C:"
     return Path(f"{drive}\\p")
 
 
-def device_sdkconfig_files(request: "BuildRequest") -> List[Path]:
-    """The `sdkconfig` files a device build's ESP-IDF project generated."""
+def embedded_sdkconfig_files(request: "BuildRequest") -> List[Path]:
+    """The `sdkconfig` files an embedded build's ESP-IDF project generated."""
     if request.target_directory is None:
         return []
     build_root = request.target_directory / str(request.target) / request.profile_name
     return sorted(build_root.glob("build/esp-idf-sys-*/out/sdkconfig"))
 
 
-def write_device_sdkconfig_defaults(request: "BuildRequest") -> Optional[Path]:
-    """Writes the ESP-IDF defaults a device build passes, and clears a stale sdkconfig.
+def write_embedded_sdkconfig_defaults(request: "BuildRequest") -> Optional[Path]:
+    """Writes the ESP-IDF defaults an embedded build passes, and clears a stale sdkconfig.
 
     The repository's defaults file holds the settings that name no path. The
     partition table does, and ESP-IDF resolves a custom table against its own
@@ -406,11 +406,11 @@ def write_device_sdkconfig_defaults(request: "BuildRequest") -> Optional[Path]:
     survives. It has to go when the generated defaults change, or the previous
     flash size and partition table would keep winning.
     """
-    settings = request.repository_root / DEVICE_SDKCONFIG_DEFAULTS
-    partition_csv = request.repository_root / DEVICE_PARTITION_CSV
+    settings = request.repository_root / EMBEDDED_SDKCONFIG_DEFAULTS
+    partition_csv = request.repository_root / EMBEDDED_PARTITION_CSV
     if not settings.is_file() or not partition_csv.is_file():
         print(
-            f"  sdkconfig: {DEVICE_SDKCONFIG_DEFAULTS} or {DEVICE_PARTITION_CSV} "
+            f"  sdkconfig: {EMBEDDED_SDKCONFIG_DEFAULTS} or {EMBEDDED_PARTITION_CSV} "
             "is missing; the build falls back to ESP-IDF's defaults",
             file=sys.stderr,
         )
@@ -426,7 +426,7 @@ def write_device_sdkconfig_defaults(request: "BuildRequest") -> Optional[Path]:
     overlay.parent.mkdir(parents=True, exist_ok=True)
     overlay.write_text(content, encoding="utf-8")
     if content != previous:
-        for stale in device_sdkconfig_files(request):
+        for stale in embedded_sdkconfig_files(request):
             stale.unlink()
             print(f"  sdkconfig: dropped {stale.parent}, its defaults changed")
     return overlay
@@ -475,6 +475,21 @@ def apply_shipping_host_default(arguments: list, project_root) -> list:
     return arguments
 
 
+def apply_embedded_feature(arguments: list, target: Optional[str]) -> list:
+    """Turns the embedded posture on for an embedded target.
+
+    `embedded` selects the ESP-IDF entry point, worker pool and frame loop,
+    which the target alone cannot select; the crate's build script refuses the
+    two mismatched combinations. A caller that already passed the feature is
+    left alone.
+    """
+    if not is_embedded_target(target):
+        return arguments
+    if "embedded" in collect_requested_features(arguments):
+        return arguments
+    return arguments + ["--features", "embedded"]
+
+
 def copy_shipping_artifacts(
     target_directory: Path,
     artifacts_directory: Path,
@@ -509,7 +524,7 @@ def copy_shipping_artifacts(
 
     if target:
         copy_renamed(release_directory / "pill_standalone", f"{build_binary_name}.elf")
-        for name in DEVICE_FLASH_BINARIES:
+        for name in EMBEDDED_FLASH_BINARIES:
             copy_renamed(release_directory / name, name)
         if partition_csv is not None:
             copy_renamed(partition_csv, partition_csv.name)
@@ -658,7 +673,7 @@ def rustc_verbose_info() -> dict:
 def target_platform(build_target: Optional[str] = None) -> str:
     """Returns the triple the build produces: the requested one, else the host.
 
-    The report names what was built, so a cross build shows the device triple
+    The report names what was built, so a cross build shows the embedded triple
     and not the machine that happened to run the script. Falls back to the OS
     name and machine architecture when rustc cannot be queried.
     """
@@ -1095,6 +1110,8 @@ def resolve_build_request(argv: List[str]) -> BuildRequest:
         resolve_project_root(repository_root, project_path) if project_path else None
     )
     arguments = apply_shipping_host_default(arguments, project_root)
+    target = extract_target(arguments)
+    arguments = apply_embedded_feature(arguments, target)
 
     requested_features = collect_requested_features(arguments)
     shipping = SHIPPING_FEATURE in requested_features
@@ -1105,10 +1122,9 @@ def resolve_build_request(argv: List[str]) -> BuildRequest:
             "PROJECT_PATH at a directory with a .csproj"
         )
 
-    target = extract_target(arguments)
-    if is_device_target(target) and (managed or aot):
+    if is_embedded_target(target) and (managed or aot):
         raise BuildRequestError(
-            f"the device target {target} is Rust-only: it has no CLR and no "
+            f"the embedded target {target} is Rust-only: it has no CLR and no "
             "NativeAOT, so a C# shipping project or --csharp-aot cannot be "
             "built for it"
         )
@@ -1133,8 +1149,8 @@ def resolve_build_request(argv: List[str]) -> BuildRequest:
                 "project_settings.yaml)."
             )
         target_directory = project_root / "build" / "build_meta" / "pill_build_data"
-        if is_device_target(target):
-            target_directory = device_target_directory(repository_root)
+        if is_embedded_target(target):
+            target_directory = embedded_target_directory(repository_root)
         artifacts_directory = (
             project_root / "build" / datetime.datetime.now().strftime("%d-%m-%Y_%H-%M")
         )
@@ -1154,7 +1170,7 @@ def resolve_build_request(argv: List[str]) -> BuildRequest:
     )
     if profile_already_chosen:
         profile_arguments = []
-    elif is_device_target(target):
+    elif is_embedded_target(target):
         profile_arguments = ["--profile", EMBEDDED_PROFILE]
     else:
         profile_arguments = ["--release"]
@@ -1320,8 +1336,8 @@ def factory_partition(partition_table: Path) -> Optional[int]:
     return None
 
 
-def report_device_size(request: BuildRequest, elf_path: Path) -> int:
-    """Prints the device image's flash and RAM cost, and enforces the budget.
+def report_embedded_size(request: BuildRequest, elf_path: Path) -> int:
+    """Prints the embedded image's flash and RAM cost, and enforces the budget.
 
     The flash budget is a share of the factory partition the build declares, so
     a layout change moves it: a budget fixed by hand could sit above the very
@@ -1331,38 +1347,38 @@ def report_device_size(request: BuildRequest, elf_path: Path) -> int:
     Returns 1 when either budget is exceeded, 0 otherwise (including when the
     `size` tool is missing: a missing tool must not fail a build).
     """
-    size_tool = find_device_size_tool(request.target)
+    size_tool = find_embedded_size_tool(request.target)
     if size_tool is None:
         print(
-            "device size report skipped: no riscv32/xtensa `size` tool found",
+            "embedded size report skipped: no riscv32/xtensa `size` tool found",
             file=sys.stderr,
         )
         return 0
-    sections = device_size_sections(elf_path, size_tool)
+    sections = embedded_size_sections(elf_path, size_tool)
     if sections is None:
         print(
-            f"device size report skipped: `{size_tool}` could not read "
+            f"embedded size report skipped: `{size_tool}` could not read "
             f"{elf_path.name}",
             file=sys.stderr,
         )
         return 0
-    budget = dict(DEVICE_SIZE_BUDGET)
+    budget = dict(EMBEDDED_SIZE_BUDGET)
     notes = {"flash_bytes": "", "ram_bytes": ""}
     room = factory_partition(request.artifacts_directory / "partition-table.bin")
     if room is None:
         print(
-            "device flash budget: no partition table in the bundle, falling "
+            "embedded flash budget: no partition table in the bundle, falling "
             f"back to {human_readable_size(budget['flash_bytes'])}",
             file=sys.stderr,
         )
     else:
-        budget["flash_bytes"] = room * DEVICE_FLASH_BUDGET_PERCENT // 100
+        budget["flash_bytes"] = room * EMBEDDED_FLASH_BUDGET_PERCENT // 100
         notes["flash_bytes"] = (
-            f" = {DEVICE_FLASH_BUDGET_PERCENT}% of the "
+            f" = {EMBEDDED_FLASH_BUDGET_PERCENT}% of the "
             f"{human_readable_size(room)} factory partition"
         )
     print()
-    print(f"device size: {elf_path.name}")
+    print(f"embedded size: {elf_path.name}")
     for key, label in (("flash_bytes", "flash image"), ("ram_bytes", "internal RAM")):
         print(
             f"  {label:<13} {human_readable_size(sections[key]):>10}  "
@@ -1371,7 +1387,7 @@ def report_device_size(request: BuildRequest, elf_path: Path) -> int:
     over = [key for key in budget if sections[key] > budget[key]]
     if over:
         print(
-            "error: the device image exceeds its size budget in: "
+            "error: the embedded image exceeds its size budget in: "
             + ", ".join(f"{key}{notes[key]}" for key in over),
             file=sys.stderr,
         )
@@ -1379,8 +1395,8 @@ def report_device_size(request: BuildRequest, elf_path: Path) -> int:
     return 0
 
 
-def find_device_size_tool(target: Optional[str]) -> Optional[str]:
-    """The `size` tool for a device target, from PATH or the Espressif tools."""
+def find_embedded_size_tool(target: Optional[str]) -> Optional[str]:
+    """The `size` tool for an embedded target, from PATH or the Espressif tools."""
     prefix = "xtensa" if (target or "").startswith("xtensa") else "riscv32"
     tool_name = f"{prefix}-esp-elf-size"
     found = shutil.which(tool_name)
@@ -1395,7 +1411,7 @@ def find_device_size_tool(target: Optional[str]) -> Optional[str]:
     return str(candidates[0]) if candidates else None
 
 
-def device_size_sections(elf_path: Path, size_tool: str) -> Optional[dict]:
+def embedded_size_sections(elf_path: Path, size_tool: str) -> Optional[dict]:
     """Sums the loaded flash image and internal RAM from `size -A`."""
     completed = subprocess.run(
         [size_tool, "-A", str(elf_path)], capture_output=True, text=True
@@ -1433,14 +1449,14 @@ def run_cargo(request: BuildRequest) -> subprocess.CompletedProcess:
     environment = dict(os.environ, RUSTFLAGS="")
     if request.target_directory is not None:
         environment["CARGO_TARGET_DIR"] = str(request.target_directory)
-    device_target = is_device_target(request.target)
-    if device_target:
-        # No installed toolchain ships a device std, so it is built from
+    embedded_target = is_embedded_target(request.target)
+    if embedded_target:
+        # No installed toolchain ships an embedded std, so it is built from
         # source: `+esp` is the espup toolchain, which carries the target.
-        print(f"  device target: {request.target} (std built from source)")
+        print(f"  embedded target: {request.target} (std built from source)")
         # A triple that fits more than one chip needs the chip named; an
         # explicit `MCU` in the environment wins.
-        mcu = DEVICE_MCUS.get(request.target)
+        mcu = CHIP_BY_TARGET.get(request.target)
         if mcu and "MCU" not in os.environ:
             environment["MCU"] = mcu
         # An espidf image links through `ldproxy`, which rewrites the linker
@@ -1453,11 +1469,11 @@ def run_cargo(request: BuildRequest) -> subprocess.CompletedProcess:
         if "ESP_IDF_SDKCONFIG_DEFAULTS" in os.environ:
             print("  sdkconfig: the caller's ESP_IDF_SDKCONFIG_DEFAULTS is used as is")
         else:
-            overlay = write_device_sdkconfig_defaults(request)
+            overlay = write_embedded_sdkconfig_defaults(request)
             if overlay is not None:
                 environment["ESP_IDF_SDKCONFIG_DEFAULTS"] = str(overlay)
     command = ["cargo"]
-    if device_target:
+    if embedded_target:
         command.append("+esp")
     command += [
         "build",
@@ -1465,7 +1481,7 @@ def run_cargo(request: BuildRequest) -> subprocess.CompletedProcess:
         *request.profile_arguments,
         *request.arguments,
     ]
-    if device_target:
+    if embedded_target:
         command.append("-Zbuild-std=std,panic_abort")
     return subprocess.run(command, cwd=str(request.workspace_directory), env=environment)
 
@@ -1483,8 +1499,8 @@ def copy_and_prune_artifacts(
         request.profile_name,
         request.target,
         partition_csv=(
-            request.repository_root / DEVICE_PARTITION_CSV
-            if is_device_target(request.target)
+            request.repository_root / EMBEDDED_PARTITION_CSV
+            if is_embedded_target(request.target)
             else None
         ),
     )
@@ -1629,10 +1645,10 @@ def analyze_size(
     """Optionally deep-dives into what makes up the executable."""
     if not request.analyze_size or completed.returncode != 0:
         return
-    if is_device_target(request.target):
+    if is_embedded_target(request.target):
         print(
             "--analyze_size skipped: the analysis reads PE sections, and the "
-            "device ELF gets its own section report with the size baseline.",
+            "embedded ELF gets its own section report with the size baseline.",
             file=sys.stderr,
         )
         return
@@ -1699,8 +1715,8 @@ def main() -> int:
     if completed.returncode == 0:
         print_build_report(request, copied_artifacts)
         elf_names = [name for name in copied_artifacts if name.endswith(".elf")]
-        if is_device_target(request.target) and elf_names:
-            over_budget = report_device_size(
+        if is_embedded_target(request.target) and elf_names:
+            over_budget = report_embedded_size(
                 request, request.artifacts_directory / elf_names[0]
             )
             if over_budget != 0:

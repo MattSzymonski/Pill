@@ -268,13 +268,13 @@ STEPS: List[Step] = [
         ],
     ),
     Step(
-        "device-build",
-        "Device image (ESP32-C6, skipped without the ESP toolchain)",
-        # The whole device posture end to end, short of flashing: graph, std
+        "embedded-build",
+        "Embedded image (ESP32-C6, skipped without the ESP toolchain)",
+        # The whole embedded posture end to end, short of flashing: graph, std
         # from source, the ESP-IDF link and the size budget. The suite skips
         # itself, with a message, on a machine without the espup toolchain and
         # an ESP-IDF checkout.
-        [[PYTHON, "devops/tests/test_device_build.py"]],
+        [[PYTHON, "devops/tests/test_embedded_build.py"]],
         working_directory=REPOSITORY_ROOT,
     ),
     Step(

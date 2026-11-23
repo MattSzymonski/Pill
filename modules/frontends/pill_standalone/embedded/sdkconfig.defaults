@@ -1,4 +1,4 @@
-# Device build settings for the shipping binary.
+# Embedded build settings for the shipping binary.
 #
 # The main task runs the whole start-up on one stack: telemetry, the embedded
 # asset pack, the ECS and the project. ESP-IDF's default 3.5 KB overflows

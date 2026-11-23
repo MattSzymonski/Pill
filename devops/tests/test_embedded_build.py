@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Builds the device image, or skips when this machine cannot.
+Builds the embedded image, or skips when this machine cannot.
 
 PROTECTS: The shipping binary still compiles, links and fits its size budget
 as a standalone ESP32-C6 image, the image fits the flash layout the build
@@ -15,7 +15,7 @@ REQUIREMENTS
 
 DESCRIPTION
     Runs `devops/ci_cd/build_shipping.py` for `riscv32imac-esp-espidf` on the
-    headless example. That covers the device posture end to end as far as a
+    headless example. That covers the embedded posture end to end as far as a
     machine without the board can: the dependency graph resolves, std is built
     from source, the image links through `ldproxy` against the ESP-IDF runtime,
     and the flash and RAM budgets in the script are enforced.
@@ -24,16 +24,16 @@ DESCRIPTION
     could be flashed from it: the factory app partition in the generated
     partition table must hold the image, the declared flash size must cover the
     board's flash chip, and the shipped bundle must carry that partition table.
-    A budget alone cannot catch a layout that does not fit a fresh device.
+    A budget alone cannot catch a layout that does not fit a fresh board.
 
     Nothing here needs the board: flashing and the boot log are the hardware
-    check, described in the item that added the device posture.
+    check, described in the item that added the embedded posture.
 
 USAGE
-  python devops/tests/test_device_build.py
+  python devops/tests/test_embedded_build.py
 
 EXAMPLE USAGE
-  python devops/tests/test_device_build.py
+  python devops/tests/test_embedded_build.py
 """
 
 # Standard library
@@ -55,7 +55,7 @@ IDF_VERSION = "v5.1.3"
 
 # The board's flash chip. The build has to declare at least this much, or the
 # image is flashed into a chip the tooling believes is smaller.
-DEVICE_FLASH_BYTES = 8 * 1024 * 1024
+EMBEDDED_FLASH_BYTES = 8 * 1024 * 1024
 
 # The app type and factory subtype are ESP-IDF's constants for the partition the
 # app image is flashed into.
@@ -94,9 +94,9 @@ def skip_reason() -> str:
     return ""
 
 
-def device_build_directory() -> Path:
-    """The target directory a device build uses, mirroring build_shipping.py."""
-    override = os.environ.get("PILL_DEVICE_TARGET_DIR")
+def embedded_build_directory() -> Path:
+    """The target directory an embedded build uses, mirroring build_shipping.py."""
+    override = os.environ.get("PILL_EMBEDDED_TARGET_DIR")
     if override:
         return Path(override)
     return Path(f"{REPOSITORY_ROOT.drive or 'C:'}\\p")
@@ -137,10 +137,10 @@ def declared_flash_bytes(sdkconfig: Path) -> Optional[int]:
 def image_flash_bytes(elf_path: Path) -> Optional[int]:
     """The flash the linked image occupies, measured as the size gate measures it."""
     build_shipping = shipping_build()
-    size_tool = build_shipping.find_device_size_tool(TARGET)
+    size_tool = build_shipping.find_embedded_size_tool(TARGET)
     if size_tool is None:
         return None
-    sections = build_shipping.device_size_sections(elf_path, size_tool)
+    sections = build_shipping.embedded_size_sections(elf_path, size_tool)
     return sections["flash_bytes"] if sections else None
 
 
@@ -183,10 +183,10 @@ def layout_problems(build_directory: Path) -> List[str]:
     flash_declaration = declared_flash_bytes(sdkconfig) if sdkconfig else None
     if flash_declaration is None:
         problems.append("the build declares no flash size against the chip")
-    elif flash_declaration < DEVICE_FLASH_BYTES:
+    elif flash_declaration < EMBEDDED_FLASH_BYTES:
         problems.append(
             f"the build declares {flash_declaration // (1024 * 1024)} MB of "
-            f"flash but the board's chip is {DEVICE_FLASH_BYTES // (1024 * 1024)} MB"
+            f"flash but the board's chip is {EMBEDDED_FLASH_BYTES // (1024 * 1024)} MB"
         )
 
     if bundle is None:
@@ -200,12 +200,12 @@ def layout_problems(build_directory: Path) -> List[str]:
 
 
 def main() -> int:
-    """Build the device image, or skip with a message. Returns an exit code."""
+    """Build the embedded image, or skip with a message. Returns an exit code."""
     reason = skip_reason()
     if reason:
-        print(f"[SKIP] device build: {reason}")
+        print(f"[SKIP] embedded build: {reason}")
         return 0
-    print(f"[RUN] device build for {TARGET} from {EXAMPLE_PROJECT}")
+    print(f"[RUN] embedded build for {TARGET} from {EXAMPLE_PROJECT}")
     completed = subprocess.run(
         [
             sys.executable,
@@ -228,16 +228,16 @@ def main() -> int:
         cwd=str(REPOSITORY_ROOT),
     )
     if completed.returncode != 0:
-        print("[FAIL] the device image did not build")
+        print("[FAIL] the embedded image did not build")
         return completed.returncode
-    print("[RUN] device flash layout")
-    problems = layout_problems(device_build_directory())
+    print("[RUN] embedded flash layout")
+    problems = layout_problems(embedded_build_directory())
     for problem in problems:
         print(f"  - {problem}")
     if problems:
-        print("[FAIL] the device image does not fit the flash layout it declares")
+        print("[FAIL] the embedded image does not fit the flash layout it declares")
         return 1
-    print("[PASS] the device image built and fits its budget and its flash layout")
+    print("[PASS] the embedded image built and fits its budget and its flash layout")
     return 0
 
 

@@ -1,7 +1,7 @@
-# Partition layout of the shipping device image: an ESP32-C6 with 8 MB of
+# Partition layout of the shipping embedded image: an ESP32-C6 with 8 MB of
 # flash, flashed rather than updated in place, so there is one factory app and
 # no OTA slots. The data partition is reserved for project content (asset packs
-# and anything else the finished project needs on the device).
+# and anything else the finished project needs on the board).
 #
 # Name,   Type, SubType, Offset,   Size,
 nvs,      data, nvs,     0x9000,   0x6000,

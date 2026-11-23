@@ -5,6 +5,8 @@
 //! - Stage the std dylib through the shared `frontends/build_support` staging
 //!   code.
 //! - Refuse a non-debug build that enables `development`.
+//! - Refuse an `embedded` feature that disagrees with the build target, and
+//!   publish the ESP-IDF link arguments when the two agree.
 //!
 //! # Design
 //!
@@ -24,10 +26,29 @@
 mod stage_std_dylib;
 
 fn main() {
-    // A device build links the ESP-IDF runtime, and `esp-idf-sys` publishes
-    // the link arguments that link needs. A build script runs on the host, so
-    // the target is read from cargo's environment rather than `cfg!`.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("espidf") {
+    // The embedded posture is a *program*, not a target: it selects the ESP-IDF
+    // entry point, pool and loop. A build script runs on the host, so both
+    // sides come from cargo's environment rather than `cfg!`, and a mismatch
+    // is refused here, where the message can name both of them.
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let embedded = std::env::var_os("CARGO_FEATURE_EMBEDDED").is_some();
+    if embedded && target_os != "espidf" {
+        panic!(
+            "pill_standalone was built for `{target}` with the `embedded` feature: an embedded \
+             image needs an `*-esp-espidf` target. Build it with \
+             `--target riscv32imac-esp-espidf`."
+        );
+    }
+    if !embedded && target_os == "espidf" {
+        panic!(
+            "pill_standalone was built for `{target}` without the `embedded` feature: on an \
+             `*-esp-espidf` target the ESP-IDF runtime supplies the entry point. Build it with \
+             `--no-default-features --features shipping,embedded`."
+        );
+    }
+    if embedded {
+        // `esp-idf-sys` publishes the link arguments the ESP-IDF runtime needs.
         embuild::espidf::sysenv::output();
     }
     // Refused here rather than in the binary, which cannot see the profile. A

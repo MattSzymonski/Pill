@@ -1,4 +1,5 @@
-//! Standalone binary: the engine's desktop frontend, headless or windowed.
+//! Standalone binary: the engine's frontend, headless or windowed, on a
+//! desktop or on the embedded target.
 //!
 //! # Responsibilities
 //!
@@ -88,17 +89,17 @@ fn init_telemetry() {
 }
 
 // =============================================================================
-// Device Runtime Setup
+// Embedded Runtime Setup
 // =============================================================================
 
-/// Builds the Rayon global pool the device runs on.
+/// Builds the Rayon global pool the embedded target runs on.
 ///
-/// Rayon's default pool takes its worker count from a CPU count the device
+/// Rayon's default pool takes its worker count from a CPU count the target
 /// reports as zero and its stack size from a desktop default. One worker with
 /// an explicit stack is what fits the internal DRAM, and building it here
 /// keeps anything else from spawning the default pool first.
-#[cfg(target_os = "espidf")]
-fn configure_device_thread_pool() {
+#[cfg(feature = "embedded")]
+fn configure_embedded_thread_pool() {
     let _ = pill_core::rayon::ThreadPoolBuilder::new()
         .num_threads(1)
         .stack_size(64 * 1024)
@@ -126,12 +127,13 @@ fn run_standalone() -> miette::Result<()> {
     install_engine_report_handler();
     // Step 2: install the telemetry stack (best effort).
     init_telemetry();
-    // Step 3: the device's worker pool, before anything can touch Rayon.
-    #[cfg(target_os = "espidf")]
-    configure_device_thread_pool();
+    // Step 3: the embedded target's worker pool, before anything can touch
+    // Rayon.
+    #[cfg(feature = "embedded")]
+    configure_embedded_thread_pool();
     // Step 3: log the declarations the image carries. `inventory`'s
     // constructors run before `main` on a static build, so they are already
-    // here; a device image with none means they were never emitted into
+    // here; an embedded image with none means they were never emitted into
     // `.init_array`, and the project then fails at its first system spawn.
     #[cfg(feature = "shipping")]
     {
@@ -146,10 +148,10 @@ fn run_standalone() -> miette::Result<()> {
             value_types = declarations.value_types,
             "declarations registered before the project starts"
         );
-        #[cfg(target_os = "espidf")]
+        #[cfg(feature = "embedded")]
         if declarations.components == 0 || declarations.systems == 0 {
             return Err(miette::miette!(
-                "the device image registered no components or systems: \
+                "the embedded image registered no components or systems: \
                  inventory's .init_array constructors did not run \
                  (see modules/vendor/inventory/README.pill.md)"
             ));
@@ -190,18 +192,18 @@ fn run_standalone() -> miette::Result<()> {
 /// Runs the standalone binary on a desktop.
 ///
 /// The report's `Err` becomes the process exit code through `Termination`.
-#[cfg(not(target_os = "espidf"))]
+#[cfg(not(feature = "embedded"))]
 fn main() -> miette::Result<()> {
     run_standalone()
 }
 
-/// The device entry point, called by `esp-idf-sys`'s `app_main`.
+/// The embedded entry point, called by `esp-idf-sys`'s `app_main`.
 ///
 /// `link_patches` is what binds the crate's `main` to the C `app_main` the
 /// ESP-IDF runtime calls. Returning from here hands control back to ESP-IDF
 /// with nothing left to run, so a failure parks instead: the report goes to
 /// the UART and the board does not reboot-loop.
-#[cfg(target_os = "espidf")]
+#[cfg(feature = "embedded")]
 fn main() {
     esp_idf_sys::link_patches();
     if let Err(report) = run_standalone() {

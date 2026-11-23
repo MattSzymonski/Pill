@@ -28,9 +28,9 @@ Designed from the ground up around performance, modularity and a frictionless de
 - **Tiny build sizes**
 - **Absolute streaming beast**
 - **Blazing startup times**
-- **Embedded device support (Rust projects, headless, ESP32-C6 today)**
+- **Embedded support (Rust projects, headless, ESP32-C6 today)**
 
-## Device builds
+## Embedded builds
 
 A Rust project can ship as one standalone headless image for the ESP32-C6
 (`riscv32imac-esp-espidf`): no renderer, no development host, no C# runtime.
@@ -56,19 +56,25 @@ espflash flash --chip esp32c6 --port COM4 --flash-size 8mb ^
   --monitor %BUNDLE%\HeadlessRust.elf
 ```
 
-The layout is `modules/frontends/pill_standalone/device/partitions.csv`: `nvs`
+The layout is `modules/frontends/pill_standalone/embedded/partitions.csv`: `nvs`
 24 KB, `phy_init` 4 KB, a 2 MB factory app and a 1 MB `data` partition for
 project content, on the C6's 8 MB of flash. The flash budget is 90 % of that
 factory partition, computed from the table the bundle ships, and the RAM budget
 is an absolute 97.7 KB. The headless example measures a 1.4 MB flash image on
-the device (a 1.5 MB app, 72 % of its partition) and 46.7 KB of internal RAM.
+the board (a 1.5 MB app, 72 % of its partition) and 46.7 KB of internal RAM.
 
 What the build needs: the espup `esp` Rust toolchain, ESP-IDF 5.1.3 with the
-`riscv32-esp-elf` toolchain, and `ldproxy` and `espflash` on `PATH`. A C#
-project is refused for a device target before anything is built.
+`riscv32-esp-elf` toolchain, `ldproxy` and `espflash` on `PATH`, the ESP-IDF
+environment exported (`. <esp-idf>\export.ps1` here, `export.sh` elsewhere) and
+`ESP_IDF_PATH` pointing at the same checkout. A C# project is refused for an
+embedded target before anything is built.
 
-The device image is Rust-only. There is no CLR and no NativeAOT for these
-chips, so scripting on a device is not offered.
+`devops/tests/test_embedded_build.py` builds the image and checks it against
+the flash layout it declares. Without that environment it prints `[SKIP]` and
+exits 0, so read its log rather than its exit code when you expected a build.
+
+The embedded image is Rust-only. There is no CLR and no NativeAOT for these
+chips, so scripting on them is not offered.
 
 ## Links
 **Discover Pill at [PillEngine.org](https://pillengine.org)**
