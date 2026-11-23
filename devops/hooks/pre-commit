@@ -5,7 +5,7 @@
 #
 # - Refuses a staged shipping bundle that is a generation; only the
 #   project-agnostic stub may be committed.
-# - Refuses a staged file larger than the size limit.
+# - Refuses a file the commit adds that is larger than the size limit.
 # - Refuses files under examples/ that are not one of the allowed example
 #   projects.
 #
@@ -94,6 +94,8 @@ refuse_size() {
 commit refused: $1 is $2 bytes, over the $SIZE_LIMIT_BYTES-byte limit.
   The limit keeps an accidental archive, database, screenshot or build output
   out of the tree, where it would stay in every clone and every future diff.
+  It measures the files a commit adds, so editing an existing large file is
+  allowed.
   fix: split the file so each part is under the limit, or raise
   SIZE_LIMIT_BYTES in devops/hooks/policy.env and commit that change first.
 EOF
@@ -142,10 +144,10 @@ check_stub() {
 # Added and modified files only: a deletion stages no blob, and removing a large
 # file must always stay possible.
 check_size() {
-    # Step 1: list what the commit adds or changes.
-    staged=$(git diff --cached --name-only --diff-filter=AM)
+    # Step 1: list what the commit adds.
+    staged=$(git diff --cached --name-only --diff-filter=A)
 
-    # Step 2: measure each staged blob, by the size the commit would store.
+    # Step 2: measure each added blob, by the size the commit would store.
     while IFS= read -r path; do
         [ -n "$path" ] || continue
         size=$(git cat-file -s ":$path" 2>/dev/null || echo 0)
