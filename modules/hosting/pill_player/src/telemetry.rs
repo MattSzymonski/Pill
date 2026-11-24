@@ -10,6 +10,10 @@
 //!   ([`apply_logging_settings`]).
 //! - Install the shared metrics recorder when the `metrics` feature is on.
 //! - Report a frontend failure with its whole cause chain ([`report_failure`]).
+//! - Run the start-up every game frontend shares: the report handler, the
+//!   telemetry stack with the `ECS_LOG_DIR` file lane
+//!   ([`init_frontend_telemetry`]), and the one report a run's final failure
+//!   becomes ([`run_failure_report`]).
 //!
 //! # Design
 //!
@@ -24,6 +28,10 @@
 //! reload the filters in place. They come in as [`LoggingSettings`], already
 //! checked: this crate reads no YAML, so the development host parses the
 //! settings file and a shipping bundle carries them as text.
+//!
+//! The start-up is shared, not ruled: a frontend that has no filesystem passes
+//! its own directory to [`init_telemetry`] instead of using the environment
+//! convention.
 
 // Standard library
 use std::path::PathBuf;
@@ -343,6 +351,59 @@ pub fn report_failure(failed_operation: &str, error: &(dyn std::error::Error + '
     );
 }
 
+/// The environment variable naming the directory a game frontend's rolling log
+/// file is written to.
+const LOG_DIRECTORY_VARIABLE: &str = "ECS_LOG_DIR";
+
+/// Installs the telemetry stack a game frontend runs on.
+///
+/// Terminal logging is always on. When `ECS_LOG_DIR` names a directory, the
+/// log is also written to a rolling file there. The directory is read here, so
+/// the variable has one definition for every frontend that has a filesystem.
+///
+/// Setup is best-effort: the caller decides what to print when it fails, since
+/// the message reports that the logger itself did not start.
+///
+/// # Errors
+///
+/// Same as [`init_telemetry`].
+pub fn init_frontend_telemetry() -> Result<TelemetryHandles, TelemetryError> {
+    let file_log_directory = std::env::var_os(LOG_DIRECTORY_VARIABLE).map(PathBuf::from);
+    init_telemetry(file_log_directory)
+}
+
+/// Installs the engine report handler as `miette`'s process-wide hook.
+///
+/// Call it once, at a frontend's top-level reporting boundary, before anything
+/// can fail: the hook is what prints a [`miette::Report`] in the engine's
+/// terminal styling.
+pub fn install_report_handler() {
+    pill_core::error::install_engine_report_handler();
+}
+
+/// Reports the failure that ended a run, and turns it into the one styled
+/// report.
+///
+/// The failure is logged first, so it appears inside whatever spans were
+/// active and in the log files next to the run's other messages. The returned
+/// report keeps the error's own code, help, labels and cause chain.
+pub fn run_failure_report<E>(error: E) -> miette::Report
+where
+    E: pill_core::error::EngineMessage
+        + miette::Diagnostic
+        + std::fmt::Display
+        + Send
+        + Sync
+        + 'static,
+{
+    pill_core::error!(
+        target: telemetry_target::ENGINE,
+        error = %error,
+        "host terminated with an error"
+    );
+    pill_core::error::engine_report(error)
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -423,5 +484,20 @@ mod tests {
         let settings = LoggingSettings::from_text(None, Some("time"), None, &[]).unwrap();
 
         assert_eq!(settings.timestamp, Some(TimestampFormat::Time));
+    }
+
+    /// The report a run's failure becomes carries the failure's own message,
+    /// not a summary of it.
+    #[test]
+    fn the_run_failure_report_names_the_leaf_message() {
+        let failure =
+            pill_core::error::HostError::from(pill_core::error::ConfigError::EmptyModuleName);
+
+        let report = run_failure_report(failure);
+
+        assert!(
+            format!("{report}").contains("module name must not be empty"),
+            "{report}"
+        );
     }
 }

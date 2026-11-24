@@ -11,7 +11,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
 # describes less flash than the chip has.
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 
-# The layout in `partitions.csv` beside this file. The build appends the
-# absolute path to it, because ESP-IDF resolves a custom table against its own
-# project directory rather than against the repository.
+# The layout in `memory_partitions_config.csv` beside this file. The build
+# appends the absolute path to it, because ESP-IDF resolves a custom table
+# against its own project directory rather than against the repository.
 CONFIG_PARTITION_TABLE_CUSTOM=y

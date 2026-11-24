@@ -1,0 +1,74 @@
+[package]
+name = "pill_embedded"
+version = "0.1.0"
+edition = "2021"
+
+# Its own workspace, excluded from the host workspace: the only code here links
+# an embedded SDK, and no host build may resolve `esp-idf-sys` - its build
+# script runs ESP-IDF's own and fails before this crate's script can say why.
+[workspace]
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+[lints]
+workspace = true
+
+# Shipping only: the crate runs a statically linked project and has no
+# development posture, so "shipping only" is the dependency graph.
+[dependencies]
+pill_core = { path = "../../engine/pill_core" }
+# The runtime: the frame driver, the static project setup and the shared
+# start-up every frontend runs.
+pill_player = { path = "../../hosting/pill_player" }
+# The generated project bundle, at the same fixed path the desktop frontend
+# uses. The committed stub keeps it resolvable and refuses to compile until
+# `generate_shipping_bundle.py` writes a generation.
+pill_shipping_bundle = { path = "../../../build/pill_shipping_bundle" }
+miette = { version = "7", features = ["derive"] }
+# The ESP-IDF runtime: `app_main`, the entry point it calls, and the free-heap
+# query. A plain optional dependency rather than a target-gated one, because
+# this crate is never built on a host - which is what its own workspace and the
+# host workspace's `exclude` buy.
+esp-idf-sys = { version = "0.35", features = ["binstart"], optional = true }
+
+# The build-script half of the embedded link: `sysenv::output()` forwards the
+# link arguments `esp-idf-sys` published, which the binary's own link needs.
+[build-dependencies]
+embuild = { version = "0.32", features = ["espidf"], optional = true }
+
+[features]
+# No SDK by default: nothing in this crate compiles on a host anyway, and a
+# binary states which SDK it implements.
+default = []
+# The ESP-IDF SDK: its entry point, its runtime and its build script.
+espidf = ["dep:esp-idf-sys", "dep:embuild"]
+
+# One binary per SDK, each gated on its own feature, so a build names the SDK it
+# runs and an unsupported one fails at the feature rather than at link time.
+[[bin]]
+name = "espidf"
+path = "src/bin/espidf_target.rs"
+required-features = ["espidf"]
+
+# The profile the embedded build uses. Profiles belong to a workspace root, so
+# this one repeats the settings the host workspace's release profile sets and
+# adds `panic = "abort"`, which the ESP-IDF runtime needs (it ships no unwinder).
+[profile.release-embedded]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# `inventory` marks its `.init_array` constructors only for a fixed list of
+# `target_os` values, and `espidf` is missing from it: an image without this
+# patched copy registers no components, systems or resources at all. The
+# vendored copy adds the one line (see `vendor/inventory/README.pill.md`).
+# Patches are read from the workspace root, which is this manifest.
+[patch.crates-io]
+inventory = { path = "../../vendor/inventory" }

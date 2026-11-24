@@ -14,7 +14,9 @@
 //! - With `rendering`: attaches a renderer to a window passed as raw handles
 //!   ([`RendererWindow`], [`attach_renderer`]) and draws frames
 //!   ([`AttachedRenderer`], [`RenderingRuntime`]).
-//! - Installs the telemetry stack ([`init_telemetry`]) and defines
+//! - Installs the telemetry stack ([`init_telemetry`]), runs the start-up a
+//!   game frontend shares ([`install_report_handler`],
+//!   [`init_frontend_telemetry`], [`run_failure_report`]) and defines
 //!   [`FrameDriver`], the trait a frontend's loop drives.
 //!
 //! # Design
@@ -62,6 +64,10 @@ mod telemetry;
 /// crate alone.
 pub use pill_engine::common_components::TransformComponent;
 
+/// The declaration counts an image registers before its project starts, as
+/// [`report_declarations`] returns them.
+pub use pill_engine::declarations::DeclarationBaseline;
+
 /// The renderer contract's types that appear in this crate's API: surfaces,
 /// cameras, picking, previews and the scene grid.
 pub use pill_renderer_api::{
@@ -85,15 +91,16 @@ pub use runtime::WindowedFrameDriver;
 
 /// The static-link contract a shipping bundle passes in.
 pub use static_project::{
-    no_project_registration, ProjectBackend, StaticLogging, StaticModule, StaticProject,
-    StaticProjectBackend, StaticRenderer, StaticRendererAttachFn,
+    no_project_registration, report_declarations, require_declarations, ProjectBackend,
+    StaticLogging, StaticModule, StaticProject, StaticProjectBackend, StaticRenderer,
+    StaticRendererAttachFn,
 };
 
-/// The telemetry stack, the logging settings a project applies to it, and
-/// failure reporting.
+/// The telemetry stack, the logging settings a project applies to it, failure
+/// reporting, and the start-up a game frontend shares.
 pub use telemetry::{
-    apply_logging_settings, init_telemetry, init_telemetry_with_capture, report_failure,
-    LoggingSettings,
+    apply_logging_settings, init_frontend_telemetry, init_telemetry, init_telemetry_with_capture,
+    install_report_handler, report_failure, run_failure_report, LoggingSettings,
 };
 
 /// The windowed runtime's error.

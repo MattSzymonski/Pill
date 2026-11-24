@@ -1,9 +1,10 @@
-//! Standalone binary: the engine's frontend, headless or windowed, on a
-//! desktop or on the embedded target.
+//! Standalone binary: the engine's frontend, headless or windowed, on the
+//! desktop.
 //!
 //! # Responsibilities
 //!
-//! - Install the engine report handler and the shared telemetry stack.
+//! - Run the shared start-up: the report handler, the telemetry stack and the
+//!   declaration baseline a shipped image carries.
 //! - Select what to run - the development host (`development`) or the linked project
 //!   (`shipping`) - and run it through the windowed or headless loop, whichever
 //!   this build compiled.
@@ -19,13 +20,9 @@
 //! `pill_development_host` at all, so development code cannot reach a shipped
 //! binary. There is no GPU code here: the runtime attaches the renderer, and
 //! the renderer lives in its own crate.
-
-// Standard library
-use std::path::PathBuf;
-
-// External crates
-use pill_core::error::{engine_report, install_engine_report_handler};
-use pill_core::telemetry::telemetry_target;
+//!
+//! A bare board runs the project through `pill_embedded`, a frontend of its
+//! own: this binary is the desktop's.
 
 // Current crate
 use crate::error::RunError;
@@ -70,40 +67,16 @@ compile_error!(
 
 /// Installs the shared telemetry stack that the rest of the run logs through.
 ///
-/// Terminal logging is always on. When `ECS_LOG_DIR` is set, the log is also
-/// written to a rolling file in that directory. With the `profiling` feature,
-/// `profile::*` spans go to Tracy through their own filter; `profiling-fine`
-/// also sends the fine-grained zones.
-///
-/// Setup is best-effort: a failure only costs telemetry. It is printed to
-/// stderr and does not stop the run.
+/// A file lane is added when `ECS_LOG_DIR` names a directory, and the
+/// `profiling` features route spans to Tracy; `pill_player` owns both. Setup is
+/// best-effort: a failure only costs telemetry. It is printed to stderr and
+/// does not stop the run.
 fn init_telemetry() {
-    // Step 1: read the optional log directory from the environment.
-    let file_log_directory = std::env::var_os("ECS_LOG_DIR").map(PathBuf::from);
-    // Step 2: install the stack, printing a setup failure to stderr.
-    if let Err(error) = pill_player::init_telemetry(file_log_directory) {
+    if let Err(error) = pill_player::init_frontend_telemetry() {
         // This message cannot go through the logger: it reports that the
         // logger itself failed to install.
         eprintln!("[standalone] telemetry setup failed: {error}");
     }
-}
-
-// =============================================================================
-// Embedded Runtime Setup
-// =============================================================================
-
-/// Builds the Rayon global pool the embedded target runs on.
-///
-/// Rayon's default pool takes its worker count from a CPU count the target
-/// reports as zero and its stack size from a desktop default. One worker with
-/// an explicit stack is what fits the internal DRAM, and building it here
-/// keeps anything else from spawning the default pool first.
-#[cfg(feature = "embedded")]
-fn configure_embedded_thread_pool() {
-    let _ = pill_core::rayon::ThreadPoolBuilder::new()
-        .num_threads(1)
-        .stack_size(64 * 1024)
-        .build_global();
 }
 
 // =============================================================================
@@ -113,50 +86,26 @@ fn configure_embedded_thread_pool() {
 /// Installs the report handler, runs the project, and turns a failure into a
 /// report.
 ///
-/// The telemetry stack is installed before the run loop starts, so a failure is
-/// logged to the terminal and, when one is configured, to the log file.
+/// The start-up comes from `pill_player`, which every frontend links: the
+/// report handler and the telemetry stack, so a failure is logged to the
+/// terminal and, when one is configured, to the log file.
 ///
 /// # Errors
 ///
 /// Returns the configuration failure as a report when the project's settings
-/// are missing or invalid. Otherwise, returns the styled [`engine_report`] of
-/// the failure that ended the run, after also logging that failure to the
-/// tracing output, so it can be matched with the active spans and log files.
+/// are missing or invalid. Otherwise, returns the styled report of the failure
+/// that ended the run, after also logging that failure to the tracing output,
+/// so it can be matched with the active spans and log files.
 fn run_standalone() -> miette::Result<()> {
     // Step 1: install the miette report handler before anything can fail.
-    install_engine_report_handler();
+    pill_player::install_report_handler();
     // Step 2: install the telemetry stack (best effort).
     init_telemetry();
-    // Step 3: the embedded target's worker pool, before anything can touch
-    // Rayon.
-    #[cfg(feature = "embedded")]
-    configure_embedded_thread_pool();
     // Step 3: log the declarations the image carries. `inventory`'s
     // constructors run before `main` on a static build, so they are already
-    // here; an embedded image with none means they were never emitted into
-    // `.init_array`, and the project then fails at its first system spawn.
+    // here.
     #[cfg(feature = "shipping")]
-    {
-        let declarations = pill_engine::declarations::DeclarationBaseline::current();
-        pill_core::info!(
-            target: telemetry_target::ENGINE,
-            components = declarations.components,
-            systems = declarations.systems,
-            resources = declarations.resources,
-            assets = declarations.assets,
-            scripts = declarations.scripts,
-            value_types = declarations.value_types,
-            "declarations registered before the project starts"
-        );
-        #[cfg(feature = "embedded")]
-        if declarations.components == 0 || declarations.systems == 0 {
-            return Err(miette::miette!(
-                "the embedded image registered no components or systems: \
-                 inventory's .init_array constructors did not run \
-                 (see modules/vendor/inventory/README.pill.md)"
-            ));
-        }
-    }
+    pill_player::report_declarations();
     // Step 4: get the project this build runs. A development build reads
     // `PROJECT_PATH` and the project's `project_settings.yaml`. A shipping
     // build uses the generated bundle, which
@@ -173,43 +122,16 @@ fn run_standalone() -> miette::Result<()> {
     #[cfg(feature = "rendering")]
     let project_run: Result<(), RunError> = windowed_standalone::run(project);
 
-    project_run.map_err(|error| {
-        // Also send the fatal failure to the tracing output, so it appears in
-        // any active spans and in the log files.
-        pill_core::error!(
-            target: telemetry_target::ENGINE,
-            error = %error,
-            "host terminated with an error"
-        );
-        engine_report(error)
-    })
+    project_run.map_err(pill_player::run_failure_report)
 }
 
 // =============================================================================
-// Entry Points
+// Entry Point
 // =============================================================================
 
-/// Runs the standalone binary on a desktop.
+/// Runs the standalone binary.
 ///
 /// The report's `Err` becomes the process exit code through `Termination`.
-#[cfg(not(feature = "embedded"))]
 fn main() -> miette::Result<()> {
     run_standalone()
-}
-
-/// The embedded entry point, called by `esp-idf-sys`'s `app_main`.
-///
-/// `link_patches` is what binds the crate's `main` to the C `app_main` the
-/// ESP-IDF runtime calls. Returning from here hands control back to ESP-IDF
-/// with nothing left to run, so a failure parks instead: the report goes to
-/// the UART and the board does not reboot-loop.
-#[cfg(feature = "embedded")]
-fn main() {
-    esp_idf_sys::link_patches();
-    if let Err(report) = run_standalone() {
-        println!("pill_standalone stopped: {report}");
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-        }
-    }
 }

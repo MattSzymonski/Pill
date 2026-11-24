@@ -3,15 +3,19 @@
 Builds the embedded image, or skips when this machine cannot.
 
 PROTECTS: The shipping binary still compiles, links and fits its size budget
-as a standalone ESP32-C6 image, the image fits the flash layout the build
-declares for the board, the C# refusal still holds.
+as a standalone ESP32-C6 image, the embedded frontend passes clippy, the image
+fits the flash layout the build declares for the board, the C# refusal still
+holds.
 TIER: build
 
 REQUIREMENTS
   - Python 3.8+
-  - The espup `esp` Rust toolchain, ESP-IDF 5.1.3 with the riscv32-esp-elf
-    toolchain, `ldproxy` and `espflash` on PATH, and `ESP_IDF_PATH` set.
-    Without them this suite prints [SKIP] and exits 0.
+  - The espup `esp` Rust toolchain, `ldproxy` and `espflash` on PATH, and
+    ESP-IDF 5.1.3 with the RISC-V toolchain `esp-idf-sys` builds with. Either
+    export ESP-IDF's environment before the run, or set `ESP_IDF_PATH` and
+    `IDF_TOOLS_PATH` (the directory holding `tools/` and `python_env/`).
+    Without the first two this suite prints [SKIP] and exits 0; a missing
+    toolchain fails in `esp-idf-sys`, which is the build's own message.
 
 DESCRIPTION
     Runs `devops/ci_cd/build_shipping.py` for `riscv32imac-esp-espidf` on the
@@ -20,8 +24,14 @@ DESCRIPTION
     from source, the image links through `ldproxy` against the ESP-IDF runtime,
     and the flash and RAM budgets in the script are enforced.
 
-    Then it reads what the build itself declares and checks that a bare board
-    could be flashed from it: the factory app partition in the generated
+    Then it runs the embedded frontend's clippy, in the crate's own workspace
+    with the same environment and the bundle the build just generated. The
+    crate is excluded from the host workspace, so no workspace-wide clippy
+    reaches it, and no host build can resolve its SDK; this is the only place
+    its warnings are seen.
+
+    Finally it reads what the build itself declares and checks that a bare
+    board could be flashed from it: the factory app partition in the generated
     partition table must hold the image, the declared flash size must cover the
     board's flash chip, and the shipped bundle must carry that partition table.
     A budget alone cannot catch a layout that does not fit a fresh board.
@@ -199,6 +209,47 @@ def layout_problems(build_directory: Path) -> List[str]:
     return problems
 
 
+def run_frontend_clippy() -> int:
+    """Runs the embedded frontend's clippy with the build's own environment.
+
+    The crate is its own workspace, excluded from `modules/`: no workspace-wide
+    clippy reaches it, and a host build cannot resolve its SDK. The bundle the
+    build just generated is what makes it compile at all, so this runs before
+    the stub is restored.
+    """
+    build_shipping = shipping_build()
+    target_directory = build_shipping.embedded_target_directory(REPOSITORY_ROOT)
+    environment = dict(os.environ, RUSTFLAGS="")
+    environment["CARGO_TARGET_DIR"] = str(target_directory)
+    environment.update(
+        build_shipping.embedded_cargo_environment(
+            REPOSITORY_ROOT, TARGET, target_directory, build_shipping.EMBEDDED_PROFILE
+        )
+    )
+    completed = subprocess.run(
+        [
+            "cargo",
+            "+esp",
+            "clippy",
+            "--offline",
+            "--profile",
+            build_shipping.EMBEDDED_PROFILE,
+            "--target",
+            TARGET,
+            "--no-default-features",
+            "--features",
+            "espidf",
+            "-Zbuild-std=std,panic_abort",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        cwd=str(build_shipping.embedded_crate_directory(REPOSITORY_ROOT)),
+        env=environment,
+    )
+    return completed.returncode
+
+
 def main() -> int:
     """Build the embedded image, or skip with a message. Returns an exit code."""
     reason = skip_reason()
@@ -217,8 +268,12 @@ def main() -> int:
         ],
         cwd=str(REPOSITORY_ROOT),
     )
+    clippy_status = None
+    if completed.returncode == 0:
+        print("[RUN] embedded frontend clippy")
+        clippy_status = run_frontend_clippy()
     # The build regenerates the tracked bundle for this project; put the stub
-    # back so the tree is left as it was found, whatever the build's outcome.
+    # back so the tree is left as it was found, whatever the outcome.
     subprocess.run(
         [
             sys.executable,
@@ -230,6 +285,9 @@ def main() -> int:
     if completed.returncode != 0:
         print("[FAIL] the embedded image did not build")
         return completed.returncode
+    if clippy_status != 0:
+        print("[FAIL] the embedded frontend does not pass clippy")
+        return clippy_status
     print("[RUN] embedded flash layout")
     problems = layout_problems(embedded_build_directory())
     for problem in problems:
@@ -237,7 +295,10 @@ def main() -> int:
     if problems:
         print("[FAIL] the embedded image does not fit the flash layout it declares")
         return 1
-    print("[PASS] the embedded image built and fits its budget and its flash layout")
+    print(
+        "[PASS] the embedded image built, its frontend passes clippy, and it "
+        "fits its budget and its flash layout"
+    )
     return 0
 
 

@@ -1183,11 +1183,14 @@ PLACEHOLDER_MESSAGE_FILES = ("modules/csharp/pill_csharp_bridge/src/abi.rs",)
 # A print is allowed only where telemetry cannot be: build scripts (and the
 # build-script source they include), proc macros, and a frontend's `main.rs`
 # before logging starts. Test code prints to the harness, not to the engine.
+# The embedded frontend keeps that start-up in its library (the entry point is
+# per SDK binary), so its whole source folder is the same exemption.
 PRINT_ALLOWED_PATH_FRAGMENTS = (
     "/build.rs",
     "modules/frontends/build_support/",
     "_macros/src/",
     "modules/frontends/pill_standalone/src/main.rs",
+    "modules/frontends/pill_embedded/src/",
     "modules/editor/pill_editor/src/main.rs",
 )
 

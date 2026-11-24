@@ -6,6 +6,9 @@
 //!   are compiled into the binary, rather than as DLLs found at run time.
 //! - Initializes them in the same order, and under the same owners, that the
 //!   hot-reloading host uses.
+//! - Reports what the image registered before its project starts, and refuses
+//!   an image that registered nothing ([`report_declarations`],
+//!   [`require_declarations`]).
 //! - Defines [`ProjectBackend`], the extension point through which a project
 //!   that is not Rust (a C# assembly, through `pill_csharp_bridge`) starts.
 //!
@@ -38,6 +41,7 @@ use std::sync::Arc;
 use pill_core::error::{HostError, LibraryError, ModuleError};
 use pill_core::telemetry::telemetry_target;
 use pill_core::{info, warn};
+use pill_engine::declarations::DeclarationBaseline;
 use pill_engine::{Engine, SystemOwner};
 
 // Current crate
@@ -400,6 +404,53 @@ fn apply_project_startup_scene(engine: &mut Engine, scene_path: &str) {
             "startup scene not loaded; the project starts without it"
         );
     }
+}
+
+// =============================================================================
+// Declaration Baseline
+// =============================================================================
+
+/// Logs what the image registered before its project starts, and returns it.
+///
+/// `inventory`'s constructors run before `main` on a static build, so the
+/// counts are already there when a frontend asks. A caller compares them when it
+/// needs to refuse an image that registered nothing.
+pub fn report_declarations() -> DeclarationBaseline {
+    let declarations = DeclarationBaseline::current();
+    info!(
+        target: telemetry_target::ENGINE,
+        components = declarations.components,
+        systems = declarations.systems,
+        resources = declarations.resources,
+        assets = declarations.assets,
+        scripts = declarations.scripts,
+        value_types = declarations.value_types,
+        "declarations registered before the project starts"
+    );
+    declarations
+}
+
+/// Logs the declaration baseline, then refuses an image that registered
+/// nothing.
+///
+/// An image with no components or no systems means `inventory`'s constructors
+/// were never emitted into `.init_array`; its project then fails at the first
+/// system spawn with no hint of why. The refusal names the cause instead, and
+/// the vendor patch that fixes it.
+///
+/// # Errors
+///
+/// Returns a report when the image registered no components or no systems.
+pub fn require_declarations() -> miette::Result<()> {
+    let declarations = report_declarations();
+    if declarations.components == 0 || declarations.systems == 0 {
+        return Err(miette::miette!(
+            "the embedded image registered no components or systems: \
+             inventory's .init_array constructors did not run \
+             (see modules/vendor/inventory/README.pill.md)"
+        ));
+    }
+    Ok(())
 }
 
 /// A project registration half that does nothing.

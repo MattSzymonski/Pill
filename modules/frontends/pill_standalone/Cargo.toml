@@ -29,22 +29,6 @@ pill_input = { path = "../pill_input", features = [
 # `generate_shipping_bundle.py` writes a generation (`--restore-stub` puts it
 # back).
 pill_shipping_bundle = { path = "../../../build/pill_shipping_bundle", optional = true }
-# Shipping mode only: the facade, for the declaration counts an image
-# registers before its project starts.
-pill_engine = { path = "../../engine/pill_engine", optional = true }
-
-# The embedded posture: `esp-idf-sys` supplies `app_main`, the ESP-IDF runtime
-# and the image's entry point. It stays target-gated rather than optional
-# behind `embedded`: a host build that turned it on would run ESP-IDF's own
-# build script - and fail there, with a message about directory lengths -
-# before this crate's build script could refuse the mismatch in words.
-[target.'cfg(target_os = "espidf")'.dependencies]
-esp-idf-sys = { version = "0.35", features = ["binstart"] }
-
-# The build-script half of the embedded link: `sysenv::output()` forwards the
-# link arguments `esp-idf-sys` published, which the binary's own link needs.
-[build-dependencies]
-embuild = { version = "0.32", features = ["espidf"] }
 
 
 [features]
@@ -57,15 +41,7 @@ development = ["dep:pill_development_host"]
 # Shipping mode: the bundle's project runs statically. Build with
 # `--package pill_standalone`, never `--workspace`, which would union the
 # editor's host dependency back in and re-enable `development`.
-shipping = ["dep:pill_shipping_bundle", "dep:pill_engine"]
-# The embedded target: the ESP-IDF runtime hosts the program, so the entry
-# point, the worker pool, the frame pacing and the heap probe differ. The
-# embedded build passes it beside `shipping`
-# (`--no-default-features --features shipping,embedded`). It switches this
-# crate's own source only: `esp-idf-sys` is target-gated above, so build.rs
-# refuses `embedded` on a target that is not `*-esp-espidf`, and an `espidf`
-# target without it, before either can mislead.
-embedded = []
+shipping = ["dep:pill_shipping_bundle"]
 # Windowed runs: the loop and input here, the renderer attach in the runtime.
 rendering = [
     "dep:winit",

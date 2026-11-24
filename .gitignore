@@ -15,6 +15,8 @@
 # C# build output, wherever a project lives.
 bin/
 obj/
+# Rust keeps binary targets in `src/bin`, which the C# rule above would swallow.
+!**/src/bin/
 
 # Cooked shader output: `build.rs` regenerates the `*.wgsl` beside each `*.hlsl`.
 *.wgsl
@@ -39,10 +41,11 @@ modules/projects_generated/*
 modules/editor/generated/*
 !modules/editor/generated/README.md
 
-# Generated build scratch, except the shipping-bundle stub. `pill_standalone`
-# declares the stub as a path dependency, and Cargo resolves every manifest
-# before it evaluates features, so the directory must exist even in builds that
-# never enable `shipping`. A shipping build overwrites it; restore it with
+# Generated build scratch, except the shipping-bundle stub. The two shipping
+# frontends - `pill_standalone` and `pill_embedded` - declare the stub as a path
+# dependency, and Cargo resolves every manifest before it evaluates features, so
+# the directory must exist even in builds that never link a project. A shipping
+# build overwrites it; restore it with
 # `git checkout -- build/pill_shipping_bundle`.
 **/build/*
 !build/pill_shipping_bundle/

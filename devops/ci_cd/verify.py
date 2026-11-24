@@ -192,7 +192,19 @@ def unit_test_step(name: str, title: str, lane: List[str]) -> Step:
 
 
 STEPS: List[Step] = [
-    Step("fmt", "Formatting", [["cargo", "fmt", "--check"]], quick=True),
+    Step(
+        "fmt",
+        "Formatting",
+        [
+            ["cargo", "fmt", "--check"],
+            # The embedded frontend is excluded from this workspace (its only code
+            # links an embedded SDK, which a host build cannot resolve), so the
+            # workspace command above never reaches it. Formatting needs no
+            # toolchain, so it stays here rather than in the embedded suite.
+            ["cargo", "fmt", "--manifest-path", "frontends/pill_embedded/Cargo.toml", "--check"],
+        ],
+        quick=True,
+    ),
     # Also the default posture's compile check: the workspace has no
     # `default-members`, so a bare `cargo clippy` covers every member with its
     # default features - exactly what `cargo check --workspace` would compile.
@@ -269,11 +281,12 @@ STEPS: List[Step] = [
     ),
     Step(
         "embedded-build",
-        "Embedded image (ESP32-C6, skipped without the ESP toolchain)",
+        "Embedded frontend (ESP32-C6 image and clippy, skipped without the ESP toolchain)",
         # The whole embedded posture end to end, short of flashing: graph, std
-        # from source, the ESP-IDF link and the size budget. The suite skips
-        # itself, with a message, on a machine without the espup toolchain and
-        # an ESP-IDF checkout.
+        # from source, the ESP-IDF link and the size budget - then the frontend's
+        # clippy, which no workspace-wide command reaches because its crate is
+        # excluded from `modules/`. The suite skips itself, with a message, on a
+        # machine without the espup toolchain and an ESP-IDF checkout.
         [[PYTHON, "devops/tests/test_embedded_build.py"]],
         working_directory=REPOSITORY_ROOT,
     ),

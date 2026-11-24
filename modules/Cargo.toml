@@ -82,6 +82,13 @@ exclude = [
     # The master renderer's runtime folder holds the data and gpu crates and is
     # not a crate itself.
     "extensions/pill_master_renderer/modules/runtime",
+    # The embedded frontend: its only code links an embedded SDK, and a host
+    # build has no such crate in the graph. It is its own workspace, and only
+    # an embedded build (`devops/ci_cd/build_shipping.py --target <triple>`)
+    # compiles it. Its clippy runs in the embedded suite, and its formatting in
+    # the gate's `fmt` step, because a workspace-wide cargo command cannot reach
+    # an excluded package.
+    "frontends/pill_embedded",
     "projects_generated/README.md",
     "editor/generated/README.md",
 ]
@@ -142,13 +149,6 @@ opt-level = 3
 inherits = "release"
 debug = true
 
-# The device posture. `panic = "abort"` because the ESP-IDF runtime ships no
-# unwinder, and it pairs with `-Zbuild-std=std,panic_abort`; the host profiles
-# keep unwinding for hot reload.
-[profile.release-embedded]
-inherits = "release"
-panic = "abort"
-
 # Optimized development profile: the dev host with hot reload, at full speed.
 # `release` cannot host hot reload (its `lto = "fat"` refuses `-C prefer-dynamic`),
 # so measuring performance in a dev host needs a profile of its own. The host
@@ -158,9 +158,10 @@ inherits = "dev"
 opt-level = 3
 
 # `inventory` marks its `.init_array` constructors only for a fixed list of
-# `target_os` values, and `espidf` is missing from it: a device image
+# `target_os` values, and `espidf` is missing from it: an embedded image
 # registers no components, systems or resources at all. The vendored copy adds
 # the one line (see `vendor/inventory/README.pill.md`); host builds are
-# unaffected because the added `target_os` is never true there.
+# unaffected because the added `target_os` is never true there. The embedded
+# frontend's own workspace carries the same patch.
 [patch.crates-io]
 inventory = { path = "vendor/inventory" }

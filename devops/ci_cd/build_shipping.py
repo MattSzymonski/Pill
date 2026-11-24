@@ -53,13 +53,16 @@
 #   build/01-09-2026_16-57).
 #
 #   A non-host `--target` (for example `riscv32imac-esp-espidf`) turns the same
-#   command into an embedded build: the profile defaults to `release-embedded`
-#   (`panic = "abort"`), std is built from source with the espup `esp`
-#   toolchain, the linked ELF is the artifact, and the host's DLL sidecars and
-#   PE size report do not apply. Cargo's target directory moves to a short
-#   top-level path (`PILL_EMBEDDED_TARGET_DIR`, `<drive>:\p` by default) because
-#   `esp-idf-sys` refuses an output directory longer than 88 characters on
-#   Windows; the artifacts still land under the project.
+#   command into an embedded build: it builds the embedded frontend,
+#   `pill_embedded`, whose own workspace holds it and which is excluded from
+#   `modules/` because a host build cannot resolve its SDK. The profile defaults
+#   to `release-embedded` (`panic = "abort"`, defined by that workspace), std is
+#   built from source with the espup `esp` toolchain, the linked ELF is the
+#   artifact, and the host's DLL sidecars and PE size report do not apply.
+#   Cargo's target directory moves to a short top-level path
+#   (`PILL_EMBEDDED_TARGET_DIR`, `<drive>:\p` by default) because `esp-idf-sys`
+#   refuses an output directory longer than 88 characters on Windows; the
+#   artifacts still land under the project.
 #
 #   A shipping host build also writes the third-party license notices into
 #   `licenses/` beside the binary (devops/tools/generate_third_party_licenses.py:
@@ -88,14 +91,14 @@
 #                              PE section layout (always), then per-crate and
 #                              top-function attribution via cargo-bloat when
 #                              it is installed (cargo install cargo-bloat).
-#          --target <triple>   Build for another target. A non-host triple is a
-#                              embedded build: cargo runs through the `esp`
-#                              toolchain with `-Zbuild-std=std,panic_abort`,
-#                              the profile defaults to `release-embedded`, the
-#                              linked ELF is copied instead of the host binary
-#                              and its DLL sidecars, and a C# project or
-#                              `--csharp-aot` is refused (no CLR on the
-#                              embedded target).
+#          --target <triple>   Build for another target. A non-host triple is an
+#                              embedded build: cargo runs in `pill_embedded`'s
+#                              workspace through the `esp` toolchain with
+#                              `-Zbuild-std=std,panic_abort`, the profile
+#                              defaults to `release-embedded`, the linked ELF is
+#                              copied instead of the host binary and its DLL
+#                              sidecars, and a C# project or `--csharp-aot` is
+#                              refused (no CLR on the embedded target).
 #          --csharp-aot        For a managed C# project, ship the NativeAOT
 #                              posture: `dotnet publish -p:PublishAot=true`
 #                              produces one self-contained native library (no
@@ -103,7 +106,8 @@
 #                              framework-dependent `dotnet build` output.
 #          -p <package>        Build a specific package in the release profile;
 #                              targeting pill_standalone always forces the
-#                              shipping posture
+#                              shipping posture, and an embedded target always
+#                              builds pill_embedded
 #          Any other argument is passed straight to cargo.
 
 # EXAMPLE USAGE:
@@ -160,6 +164,11 @@ MISC_ARTIFACT_SUFFIXES = (".pdb", ".exp", ".lib")
 # and the generated bundle, and no development host.
 SHIPPING_FEATURE = "shipping"
 
+# The `pill_embedded` feature that selects the ESP-IDF frontend: its entry
+# point, its runtime and its build script. One feature per SDK, each gating
+# one binary.
+EMBEDDED_FEATURE = "espidf"
+
 # The profile a cross target builds with: the release profile plus
 # `panic = "abort"`, which the ESP-IDF runtime needs (it ships no unwinder).
 EMBEDDED_PROFILE = "release-embedded"
@@ -180,19 +189,34 @@ CHIP_BY_TARGET = {
     "xtensa-esp32s3-espidf": "esp32s3",
 }
 
-# The embedded build's sdkconfig defaults: the settings the image needs and the
+# The embedded build's SDK config defaults: the settings the image needs and the
 # ESP-IDF defaults do not carry, such as the main task's stack size, the flash
 # size and the choice of a custom partition table.
 EMBEDDED_SDKCONFIG_DEFAULTS = (
-    Path("modules") / "frontends" / "pill_standalone" / "embedded" / "sdkconfig.defaults"
+    Path("modules") / "frontends" / "pill_embedded" / "res" / "esp32" / "sdk_config"
 )
 
 # The embedded target's partition layout. It has to travel with the defaults as an
 # absolute path (see `write_embedded_sdkconfig_defaults`), and it is copied into
-# the bundle so a bare board can be flashed from it.
+# the bundle so a bare board can be flashed from it, under the name it has here.
 EMBEDDED_PARTITION_CSV = (
-    Path("modules") / "frontends" / "pill_standalone" / "embedded" / "partitions.csv"
+    Path("modules")
+    / "frontends"
+    / "pill_embedded"
+    / "res"
+    / "esp32"
+    / "memory_partitions_config.csv"
 )
+
+# The embedded frontend's crate: its own workspace, excluded from `modules/`,
+# because its only code links an embedded SDK that a host build cannot resolve.
+# Cargo cannot name an excluded package with `-p` from the workspace root, so an
+# embedded build runs in this directory.
+EMBEDDED_CRATE_DIRECTORY = Path("modules") / "frontends" / "pill_embedded"
+
+# The binary inside that crate an embedded build produces: one per SDK, each
+# gated on its own feature, so the name says which runtime the image runs.
+EMBEDDED_BINARY_NAME = "espidf"
 
 # The flash layout ESP-IDF generates beside an embedded image. `esp-idf-sys` leaves
 # both at the top of the embedded target directory; a bundle that leaves them out
@@ -244,6 +268,22 @@ def collect_requested_features(arguments: list) -> set:
             requested_features.update(argument[len("--features=") :].split(","))
         index += 1
     return requested_features
+
+
+def collect_requested_packages(arguments: list) -> set:
+    """Collects the package names named across `--package` / `-p` flags."""
+    packages = set()
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument in ("--package", "-p"):
+            index += 1
+            if index < len(arguments):
+                packages.add(arguments[index])
+        elif argument.startswith("--package="):
+            packages.add(argument[len("--package=") :])
+        index += 1
+    return packages
 
 
 def extract_project_argument(arguments: list) -> tuple:
@@ -384,15 +424,28 @@ def embedded_target_directory(repository_root: Path) -> Path:
     return Path(f"{drive}\\p")
 
 
-def embedded_sdkconfig_files(request: "BuildRequest") -> List[Path]:
+def embedded_crate_directory(repository_root: Path) -> Path:
+    """The crate directory an embedded build runs cargo in.
+
+    The embedded frontend is its own workspace, excluded from `modules/`: its
+    only code links an embedded SDK, and a host build has no such crate in the
+    graph. Naming an excluded package with `-p` from the workspace root does not
+    work, so an embedded build runs cargo here instead.
+    """
+    return repository_root / EMBEDDED_CRATE_DIRECTORY
+
+
+def embedded_sdkconfig_files(
+    target_directory: Path, target: str, profile_name: str
+) -> List[Path]:
     """The `sdkconfig` files an embedded build's ESP-IDF project generated."""
-    if request.target_directory is None:
-        return []
-    build_root = request.target_directory / str(request.target) / request.profile_name
+    build_root = target_directory / target / profile_name
     return sorted(build_root.glob("build/esp-idf-sys-*/out/sdkconfig"))
 
 
-def write_embedded_sdkconfig_defaults(request: "BuildRequest") -> Optional[Path]:
+def write_embedded_sdkconfig_defaults(
+    repository_root: Path, target_directory: Path, target: str, profile_name: str
+) -> Optional[Path]:
     """Writes the ESP-IDF defaults an embedded build passes, and clears a stale sdkconfig.
 
     The repository's defaults file holds the settings that name no path. The
@@ -406,8 +459,8 @@ def write_embedded_sdkconfig_defaults(request: "BuildRequest") -> Optional[Path]
     survives. It has to go when the generated defaults change, or the previous
     flash size and partition table would keep winning.
     """
-    settings = request.repository_root / EMBEDDED_SDKCONFIG_DEFAULTS
-    partition_csv = request.repository_root / EMBEDDED_PARTITION_CSV
+    settings = repository_root / EMBEDDED_SDKCONFIG_DEFAULTS
+    partition_csv = repository_root / EMBEDDED_PARTITION_CSV
     if not settings.is_file() or not partition_csv.is_file():
         print(
             f"  sdkconfig: {EMBEDDED_SDKCONFIG_DEFAULTS} or {EMBEDDED_PARTITION_CSV} "
@@ -415,9 +468,7 @@ def write_embedded_sdkconfig_defaults(request: "BuildRequest") -> Optional[Path]
             file=sys.stderr,
         )
         return None
-    if request.target_directory is None:
-        return None
-    overlay = request.target_directory / "pill-sdkconfig.defaults"
+    overlay = target_directory / "pill-sdkconfig.defaults"
     content = settings.read_text(encoding="utf-8").rstrip("\n") + "\n"
     # Forward slashes: Kconfig reads `\` in a sdkconfig string as an escape, so a
     # Windows path written with backslashes arrives with its separators eaten.
@@ -426,10 +477,44 @@ def write_embedded_sdkconfig_defaults(request: "BuildRequest") -> Optional[Path]
     overlay.parent.mkdir(parents=True, exist_ok=True)
     overlay.write_text(content, encoding="utf-8")
     if content != previous:
-        for stale in embedded_sdkconfig_files(request):
+        for stale in embedded_sdkconfig_files(target_directory, target, profile_name):
             stale.unlink()
             print(f"  sdkconfig: dropped {stale.parent}, its defaults changed")
     return overlay
+
+
+def embedded_cargo_environment(
+    repository_root: Path, target: str, target_directory: Path, profile_name: str
+) -> Dict[str, str]:
+    """The variables an embedded build adds to the caller's environment.
+
+    Shared by the build and the embedded suite, so the clippy run checks the
+    image's real configuration: no installed toolchain ships an embedded std, so
+    the linker is `ldproxy` (which rewrites the arguments ESP-IDF needs), the
+    chip is named, and the sdkconfig overlay points at the repository's defaults
+    plus the partition table.
+    """
+    environment: Dict[str, str] = {}
+    # A triple that fits more than one chip needs the chip named; an explicit
+    # `MCU` in the environment wins.
+    mcu = CHIP_BY_TARGET.get(target)
+    if mcu and "MCU" not in os.environ:
+        environment["MCU"] = mcu
+    # An espidf image links through `ldproxy`, which rewrites the linker
+    # arguments for ESP-IDF and then calls the toolchain's gcc. The toolchain's
+    # own target spec names the bare gcc, which cannot read those arguments.
+    triple_key = target.upper().replace("-", "_")
+    environment[f"CARGO_TARGET_{triple_key}_LINKER"] = "ldproxy"
+    # The image's own ESP-IDF settings; the caller's environment wins.
+    if "ESP_IDF_SDKCONFIG_DEFAULTS" in os.environ:
+        print("  sdkconfig: the caller's ESP_IDF_SDKCONFIG_DEFAULTS is used as is")
+    else:
+        overlay = write_embedded_sdkconfig_defaults(
+            repository_root, target_directory, target, profile_name
+        )
+        if overlay is not None:
+            environment["ESP_IDF_SDKCONFIG_DEFAULTS"] = str(overlay)
+    return environment
 
 
 def resolve_project_root(repository_root: Path, project_path: str) -> Path:
@@ -447,15 +532,27 @@ def resolve_project_root(repository_root: Path, project_path: str) -> Path:
     return (repository_root / project_path).resolve()
 
 
-def apply_shipping_host_default(arguments: list, project_root) -> list:
-    """Forces the shipping posture for the host.
+def apply_shipping_host_default(
+    arguments: list, project_root, target: Optional[str]
+) -> list:
+    """Forces the posture a shipping build always has.
 
     With no package scoping the script defaults to the shipping host build; an
     explicit `-p pill_standalone` is forced to the shipping posture too, so a
-    shipping build of the host can never carry the development host. Other
+    shipping build of the host can never carry the development host. An embedded
+    target always builds `pill_embedded`, whose `espidf` feature selects the
+    ESP-IDF frontend and whose workspace excludes it from the host's. Other
     packages keep their arguments as given.
     """
     if not package_selection_present(arguments):
+        if is_embedded_target(target):
+            return [
+                "--package",
+                "pill_embedded",
+                "--no-default-features",
+                "--features",
+                EMBEDDED_FEATURE,
+            ] + arguments
         return [
             "--package",
             "pill_standalone",
@@ -463,6 +560,15 @@ def apply_shipping_host_default(arguments: list, project_root) -> list:
             "--features",
             SHIPPING_FEATURE,
         ] + arguments
+    if is_embedded_target(target):
+        # An embedded image is one crate's binary; naming another package would
+        # build something that has no ESP-IDF frontend at all.
+        if "pill_embedded" not in collect_requested_packages(arguments):
+            raise BuildRequestError(
+                f"an embedded target builds `pill_embedded`, not the package this "
+                f"invocation scopes: drop `-p`/`--package`, or name `pill_embedded`."
+            )
+        return arguments
     if explicitly_targets_host(arguments):
         injected = []
         if "--no-default-features" not in arguments:
@@ -473,21 +579,6 @@ def apply_shipping_host_default(arguments: list, project_root) -> list:
         if injected:
             return injected + arguments
     return arguments
-
-
-def apply_embedded_feature(arguments: list, target: Optional[str]) -> list:
-    """Turns the embedded posture on for an embedded target.
-
-    `embedded` selects the ESP-IDF entry point, worker pool and frame loop,
-    which the target alone cannot select; the crate's build script refuses the
-    two mismatched combinations. A caller that already passed the feature is
-    left alone.
-    """
-    if not is_embedded_target(target):
-        return arguments
-    if "embedded" in collect_requested_features(arguments):
-        return arguments
-    return arguments + ["--features", "embedded"]
 
 
 def copy_shipping_artifacts(
@@ -523,7 +614,7 @@ def copy_shipping_artifacts(
             copied.append(target_name)
 
     if target:
-        copy_renamed(release_directory / "pill_standalone", f"{build_binary_name}.elf")
+        copy_renamed(release_directory / EMBEDDED_BINARY_NAME, f"{build_binary_name}.elf")
         for name in EMBEDDED_FLASH_BINARIES:
             copy_renamed(release_directory / name, name)
         if partition_csv is not None:
@@ -1109,12 +1200,14 @@ def resolve_build_request(argv: List[str]) -> BuildRequest:
     project_root = (
         resolve_project_root(repository_root, project_path) if project_path else None
     )
-    arguments = apply_shipping_host_default(arguments, project_root)
     target = extract_target(arguments)
-    arguments = apply_embedded_feature(arguments, target)
+    arguments = apply_shipping_host_default(arguments, project_root, target)
 
     requested_features = collect_requested_features(arguments)
-    shipping = SHIPPING_FEATURE in requested_features
+    # An embedded build is always a shipping build: it runs the bundle's linked
+    # project through the player, and its frontend has no development posture at
+    # all.
+    shipping = is_embedded_target(target) or SHIPPING_FEATURE in requested_features
     managed = shipping and project_is_managed(project_root)
     if aot and not managed:
         raise BuildRequestError(
@@ -1440,8 +1533,16 @@ def embedded_size_sections(elf_path: Path, size_tool: str) -> Optional[dict]:
 
 def run_cargo(request: BuildRequest) -> subprocess.CompletedProcess:
     """Runs the release profile build with `RUSTFLAGS` cleared."""
+    embedded_target = is_embedded_target(request.target)
+    # An embedded build runs in the frontend's own workspace, which excludes it
+    # from `modules/`: `-p` cannot name an excluded package from the host root.
+    build_directory = (
+        embedded_crate_directory(request.repository_root)
+        if embedded_target
+        else request.workspace_directory
+    )
     print("Building the release profile with RUSTFLAGS cleared.")
-    print(f"  workspace: {request.workspace_directory}")
+    print(f"  workspace: {build_directory}")
     if request.target_directory is not None:
         print(f"  target: {request.target_directory}")
     # An empty RUSTFLAGS replaces `build.rustflags` outright rather than
@@ -1449,29 +1550,18 @@ def run_cargo(request: BuildRequest) -> subprocess.CompletedProcess:
     environment = dict(os.environ, RUSTFLAGS="")
     if request.target_directory is not None:
         environment["CARGO_TARGET_DIR"] = str(request.target_directory)
-    embedded_target = is_embedded_target(request.target)
     if embedded_target:
         # No installed toolchain ships an embedded std, so it is built from
         # source: `+esp` is the espup toolchain, which carries the target.
         print(f"  embedded target: {request.target} (std built from source)")
-        # A triple that fits more than one chip needs the chip named; an
-        # explicit `MCU` in the environment wins.
-        mcu = CHIP_BY_TARGET.get(request.target)
-        if mcu and "MCU" not in os.environ:
-            environment["MCU"] = mcu
-        # An espidf image links through `ldproxy`, which rewrites the linker
-        # arguments for ESP-IDF and then calls the toolchain's gcc. The
-        # toolchain's own target spec names the bare gcc, which cannot read
-        # those arguments, and the workspace config must stay host-only.
-        triple_key = request.target.upper().replace("-", "_")
-        environment[f"CARGO_TARGET_{triple_key}_LINKER"] = "ldproxy"
-        # The image's own ESP-IDF settings; the caller's environment wins.
-        if "ESP_IDF_SDKCONFIG_DEFAULTS" in os.environ:
-            print("  sdkconfig: the caller's ESP_IDF_SDKCONFIG_DEFAULTS is used as is")
-        else:
-            overlay = write_embedded_sdkconfig_defaults(request)
-            if overlay is not None:
-                environment["ESP_IDF_SDKCONFIG_DEFAULTS"] = str(overlay)
+        environment.update(
+            embedded_cargo_environment(
+                request.repository_root,
+                request.target,
+                request.target_directory,
+                request.profile_name,
+            )
+        )
     command = ["cargo"]
     if embedded_target:
         command.append("+esp")
@@ -1483,7 +1573,7 @@ def run_cargo(request: BuildRequest) -> subprocess.CompletedProcess:
     ]
     if embedded_target:
         command.append("-Zbuild-std=std,panic_abort")
-    return subprocess.run(command, cwd=str(request.workspace_directory), env=environment)
+    return subprocess.run(command, cwd=str(build_directory), env=environment)
 
 
 def copy_and_prune_artifacts(
@@ -1541,11 +1631,19 @@ def write_license_notices(
     """
     if completed.returncode != 0 or not request.shipping:
         return []
+    # The manifest of the package that became the binary: the embedded
+    # frontend's own workspace for an embedded build, the host's otherwise.
+    if is_embedded_target(request.target):
+        manifest = embedded_crate_directory(request.repository_root) / "Cargo.toml"
+    else:
+        manifest = (
+            request.workspace_directory / "frontends" / "pill_standalone" / "Cargo.toml"
+        )
     command = [
         sys.executable,
         str(request.repository_root / LICENSE_GENERATOR),
         "--manifest-path",
-        str(request.workspace_directory / "frontends" / "pill_standalone" / "Cargo.toml"),
+        str(manifest),
         "--output-directory",
         str(request.artifacts_directory),
         "--features",
